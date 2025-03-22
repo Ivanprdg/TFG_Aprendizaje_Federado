@@ -14,6 +14,9 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from tqdm import tqdm
 
+from torchvision.models import resnet18, ResNet18_Weights
+import torch.nn as nn
+
 
 class ROLANN(nn.Module):
     def __init__(
@@ -203,11 +206,14 @@ class ROLANN(nn.Module):
         self._calculate_weights()  # The weights are calculated with the new
 
 if __name__ == "__main__":
-    print(torch.cuda.is_available())
+
+    # Configuramos la GPU
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # Load MNIST dataset
     transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Lambda(lambda x: x.view(-1))]
-    )  # Flatten images
+        [transforms.ToTensor(), transforms.Resize((224, 224)), transforms.Grayscale(num_output_channels=3)]
+    ) 
     mnist_train = datasets.MNIST(
         root="./data", train=True, download=True, transform=transform
     )
@@ -215,28 +221,52 @@ if __name__ == "__main__":
         root="./data", train=False, download=True, transform=transform
     )
 
+    resnet = resnet18(weights=ResNet18_Weights.DEFAULT) # Modelo ResNet18 preentrenado
+    resnet.fc = nn.Identity() # Sustituimos la capa fc por una capa identidad
+
+    # Congelamos la ResNet si queremos que no se entrene más:
+    for param in resnet.parameters():
+        param.requires_grad = False
+
     rolann = ROLANN(num_classes=10)
 
     train_loader = DataLoader(mnist_train, batch_size=128, shuffle=True)
     test_loader = DataLoader(mnist_test, batch_size=128, shuffle=False)
 
+    resnet.to(device)  # Se sube la RESNET a la GPU
+    rolann.to(device)  # Se sube la ROLANN a la GPU
+
+
     # Training
     for x, y in tqdm(train_loader):
-        label = torch.nn.functional.one_hot(y, num_classes=10) * 0.9 + 0.05
-        rolann.aggregate_update(x, label)
 
-    def evaluate(model, loader):
+        x = x.to(device) # Subimos los datos a la GPU
+        y = y.to(device) # Subimos las etiquetas a la GPU
+
+        with torch.no_grad():
+            caracterisiticas = resnet(x)
+
+        label = torch.nn.functional.one_hot(y, num_classes=10) * 0.9 + 0.05
+        rolann.aggregate_update(caracterisiticas, label)
+
+    def evaluate(model_rolann, model_resnet, loader): # Añadimos el modelo de ResNet18
         correct = 0
         total = 0
         with torch.no_grad():
             for x, y in loader:
-                preds = model(x)
+
+                x = x.to(device) # Subimos los datos a la GPU
+                y = y.to(device) # Subimos las etiquetas a la GPU
+
+                caracterisiticas = model_resnet(x) # Obtenemos las características de la ResNet18
+                preds = model_rolann(caracterisiticas) # Obtenemos las predicciones de la ROLANNs
+
                 correct += (preds.argmax(dim=1) == y).sum().item()
                 total += y.size(0)
         return correct / total
 
-    train_acc = evaluate(rolann, train_loader)
-    test_acc = evaluate(rolann, test_loader)
+    train_acc = evaluate(rolann, resnet, train_loader)
+    test_acc = evaluate(rolann, resnet, test_loader)
 
     print(f"Training Accuracy: {train_acc:.4f}")
     print(f"Test Accuracy: {test_acc:.4f}")
