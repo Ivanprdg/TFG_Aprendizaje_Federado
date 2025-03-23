@@ -45,7 +45,16 @@ La última capa de clasificación ha sido eliminada, ya que **ROLANN** se encarg
 
 ## 📈 Resultados Iniciales
 
+- **MNIST**:
+
 | Métrica            | Valor   |
 |--------------------|---------|
 | Training Accuracy  | 0.9475  |
 | Test Accuracy      | 0.9492  |
+
+- **CIFAR10**:
+
+| Métrica            | Valor   |
+|--------------------|---------|
+| Training Accuracy  | 0.7740  |
+| Test Accuracy      | 0.7703  |
