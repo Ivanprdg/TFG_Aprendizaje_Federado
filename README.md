@@ -25,7 +25,7 @@ La última capa de clasificación ha sido eliminada, ya que **ROLANN** se encarg
       param.requires_grad = False
   ```
 
-- Además, para evitar el cálculo del gradiente durante la inferencia:
+- Además, para evitar el cálculo del gradiente durante el entrenamiento:
   ```python
   with torch.no_grad():
       # Extracción de características

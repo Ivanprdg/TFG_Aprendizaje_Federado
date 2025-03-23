@@ -212,7 +212,9 @@ if __name__ == "__main__":
 
     # Load MNIST dataset
     transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Resize((224, 224)), transforms.Grayscale(num_output_channels=3)]
+        [transforms.Resize((224, 224)),
+         transforms.Grayscale(num_output_channels=3),
+         transforms.ToTensor()]
     ) 
     mnist_train = datasets.MNIST(
         root="./data", train=True, download=True, transform=transform
