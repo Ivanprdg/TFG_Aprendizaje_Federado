@@ -207,21 +207,51 @@ class ROLANN(nn.Module):
 
 if __name__ == "__main__":
 
+    # Dataset
+    dataset = 0  # 0: MNIST, 1: CIFAR10
+
     # Configuramos la GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load MNIST dataset
-    transform = transforms.Compose(
-        [transforms.Resize((224, 224)),
-         transforms.Grayscale(num_output_channels=3),
-         transforms.ToTensor()]
-    ) 
-    mnist_train = datasets.MNIST(
-        root="./data", train=True, download=True, transform=transform
-    )
-    mnist_test = datasets.MNIST(
-        root="./data", train=False, download=True, transform=transform
-    )
+    if dataset == 0:
+
+        # Load MNIST dataset
+        transform_mnist = transforms.Compose(
+            [transforms.Resize((224, 224)),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor()]
+        )
+        mnist_train = datasets.MNIST(
+            root="./data", train=True, download=True, transform=transform_mnist
+        )
+        mnist_test = datasets.MNIST(
+            root="./data", train=False, download=True, transform=transform_mnist
+        )
+
+        # Cargamos los datos para el entrenamiento y test
+        train_loader = DataLoader(mnist_train, batch_size=128, shuffle=True)
+        test_loader = DataLoader(mnist_test, batch_size=128, shuffle=False)
+
+    elif dataset == 1:
+
+        # Load CIFAR10 dataset
+        transform_cifar = transforms.Compose(
+            [transforms.Resize((224, 224)),
+            transforms.ToTensor()]
+        )
+
+        cifar_train = datasets.CIFAR10(
+            root="./data", train=True, download=True, transform=transform_cifar
+        )
+        cifar_test = datasets.CIFAR10(
+            root="./data", train=False, download=True, transform=transform_cifar
+        )
+
+        # Cargamos los datos para el entrenamiento y test
+        train_loader = DataLoader(cifar_train, batch_size=128, shuffle=True)
+        test_loader = DataLoader(cifar_test, batch_size=128, shuffle=False)
+    else:
+        raise ValueError("Invalid dataset value.")
 
     resnet = resnet18(weights=ResNet18_Weights.DEFAULT) # Modelo ResNet18 preentrenado
     resnet.fc = nn.Identity() # Sustituimos la capa fc por una capa identidad
@@ -231,9 +261,6 @@ if __name__ == "__main__":
         param.requires_grad = False
 
     rolann = ROLANN(num_classes=10)
-
-    train_loader = DataLoader(mnist_train, batch_size=128, shuffle=True)
-    test_loader = DataLoader(mnist_test, batch_size=128, shuffle=False)
 
     resnet.to(device)  # Se sube la RESNET a la GPU
     rolann.to(device)  # Se sube la ROLANN a la GPU

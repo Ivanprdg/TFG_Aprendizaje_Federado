@@ -4,6 +4,10 @@
 🔧 **Rama:** `feature/Implementar_vector_caracteristicas`
 
 ---
+## 📊 Datasets
+
+Se ha añadido el dataset de CIFAR10. Para poder elegir el dataset a utilizar se ha designado una variable **dataset** la cual puedes tomar valores
+0 (MNIST) o 1 (CIFAR).
 
 ## 🔍 Implementación de RESNET
 
