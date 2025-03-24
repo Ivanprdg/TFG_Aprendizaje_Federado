@@ -1,49 +1,95 @@
 # 🧠 TFG - Aprendizaje Federado
 
-📅 **Actualización:** 22/03  
+📅 **Actualización:** 24/03  
 🔧 **Rama:** `feature/Implementar_vector_caracteristicas`
 
 ---
+
 ## 📊 Datasets
 
-Se ha añadido el dataset de CIFAR10. Para poder elegir el dataset a utilizar se ha designado una variable **dataset** la cual puedes tomar valores
-0 (MNIST) o 1 (CIFAR).
+Se han incorporado los datasets **MNIST** y **CIFAR10**. Para elegir cuál utilizar, se ha definido una variable `dataset` que puede tomar los valores:
+- `0` → MNIST
+- `1` → CIFAR10
 
-## 🔍 Implementación de RESNET
+La función `get_dataset(dataset: int)` se encarga de:
+- Cargar el dataset correspondiente
+- Adaptar las imágenes al formato requerido por ResNet18
+- Calcular y aplicar la normalización de forma automática
 
-Se ha utilizado una **ResNet18 preentrenada** para aprovechar su primera capa de extracción de características.  
-La última capa de clasificación ha sido eliminada, ya que **ROLANN** se encarga de la clasificación. Esta capa se ha sustituido por una **capa de identidad**, permitiendo que el vector de salida sea igual al de entrada: el **vector de características**.
+---
 
-### 🗂️ Adaptación de datos
-- Las imágenes de **MNIST** (originalmente en B/N y de tamaño 28x28) fueron adaptadas para ser compatibles con ResNet18:
+## 🔍 Implementación de ResNet18 + ROLANN
+
+Se utiliza una **ResNet18 preentrenada** como extractor de características.  
+La capa `fc` final ha sido reemplazada por una capa identidad (`nn.Identity()`), lo que permite obtener directamente el **vector de características** de la imagen.
+
+La clasificación se realiza con el modelo **ROLANN**, que aprende a partir de dichos vectores extraídos.
+
+---
+
+### 🗂️ Adaptación y Normalización de Datos
+
+#### ✅ Preprocesamiento automático
+- Se ha creado la función `get_mean_std()` que calcula de forma precisa la **media y desviación típica por canal** sobre un dataset temporal.
+- Estos valores se utilizan para normalizar cada imagen con:
+  ```python
+  transforms.Normalize(mean.tolist(), std.tolist())
+  ```
+
+#### 🖼️ MNIST
+- Imágenes originalmente en B/N (1 canal, 28x28)
+- Adaptadas para ResNet18:
   - Redimensionadas a **224x224**
-  - Convertidas a formato **RGB** mediante:
+    ```python
+    transforms.Resize((224, 224))
+    ```
+  - Convertidas a **RGB** para que tengan 3 canales:
     ```python
     transforms.Grayscale(num_output_channels=3)
     ```
 
-### ⚖️ Congelación de pesos
-- Al ser un modelo preentrenado, **no queremos actualizar sus pesos**, por lo que se congelan con:
+#### 🖼️ CIFAR10
+- Imágenes ya en RGB, solo se redimensionan:
+  ```python
+  transforms.Resize((224, 224))
+  ```
+
+---
+
+### ⚙️ Congelación y Modo Evaluación de ResNet18
+
+- La ResNet se congela para que no se actualicen sus pesos durante el entrenamiento:
   ```python
   for param in resnet.parameters():
       param.requires_grad = False
   ```
 
-- Además, para evitar el cálculo del gradiente durante el entrenamiento:
+- Se pone en **modo evaluación** para que capas como `Dropout` o `BatchNorm` se comporten de forma fija:
+  ```python
+  resnet.eval()
+  ```
+
+- Durante la extracción de características, se desactiva el cálculo de gradientes:
   ```python
   with torch.no_grad():
       # Extracción de características
   ```
 
-### ⚡ Uso de GPU
-- Para mejorar el rendimiento, se utiliza **GPU** moviendo las operaciones pesadas mediante:
-  ```python
-  model.to(device)
-  ```
+---
+
+## ⚡ Uso de GPU
+
+Se utiliza GPU si está disponible, tanto para ResNet como para ROLANN:
+```python
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+```
 
 ---
 
-## 📈 Resultados Iniciales
+## 📈 Resultados
+
+### **22/03** (antes de normalizar correctamente):
 
 - **MNIST**:
 
@@ -58,3 +104,27 @@ La última capa de clasificación ha sido eliminada, ya que **ROLANN** se encarg
 |--------------------|---------|
 | Training Accuracy  | 0.7740  |
 | Test Accuracy      | 0.7703  |
+
+---
+
+### **24/03** (con normalización automática y mejoras):
+
+- **MNIST**:
+
+| Métrica            | Valor   |
+|--------------------|---------|
+| Training Accuracy  | 0.9677  |
+| Test Accuracy      | 0.9658  |
+
+- **CIFAR10**:
+
+| Métrica            | Valor   |
+|--------------------|---------|
+| Training Accuracy  | 0.8457  |
+| Test Accuracy      | 0.8372  |
+
+---
+
+## ✅ Conclusiones
+
+- La incorporación de la **normalización automática** basada en el propio dataset mejora significativamente el rendimiento, especialmente en el caso de CIFAR10.

@@ -18,6 +18,100 @@ from torchvision.models import resnet18, ResNet18_Weights
 import torch.nn as nn
 
 
+def get_mean_std(loader):
+    # Inicializamos sumadores
+    channels_sum = 0.0
+    channels_squared_sum = 0.0
+    num_batches = 0
+
+    # Recorremos el dataset para calcular la media y la desviación típica
+    for data, _ in tqdm(loader, desc="Calculando media y std"):
+        channels_sum += torch.mean(data, dim=[0, 2, 3]) # Media de cada canal
+        channels_squared_sum += torch.mean(data ** 2, dim=[0, 2, 3]) # Media de cada canal al cuadrado
+        num_batches += 1 # Contamos el número de batches, es decir, el número de veces que se ha ejecutado el bucle
+
+    mean = channels_sum / num_batches # Dividimos la suma de las medias de cada canal entre el número de batches
+    std = (channels_squared_sum / num_batches - mean ** 2) ** 0.5 # Calculamos la desviación típica
+
+    # Si es MNIST (1 canal), lo repetimos 3 veces para que coincida con RGB
+    if mean.numel() == 1:
+        mean = mean.repeat(3)
+        std = std.repeat(3)
+
+    return mean, std
+
+
+def get_dataset(dataset: int):
+
+    if dataset == 0:
+
+        # MNIST
+        # Transformación temporal para calcular la media y la desviación típica
+        transform_temp = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor()
+        ])
+
+        # Cargamos el dataset MNIST con la transformación temporal
+        mnist_train_temp = datasets.MNIST(root="./data", train=True, download=True, transform=transform_temp)
+        loader_temp = DataLoader(mnist_train_temp, batch_size=128, shuffle=False)
+        mean, std = get_mean_std(loader_temp) # Calculamos la media y la desviación típica
+
+        print("MNIST mean:", mean.tolist())
+        print("MNIST std :", std.tolist())
+
+        # Transformación definitiva
+        transform_mnist = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.Grayscale(num_output_channels=3), # Añadimos el canal RGB
+            transforms.ToTensor(),
+            transforms.Normalize(mean.tolist(), std.tolist())
+        ])
+
+        mnist_train = datasets.MNIST(root="./data", train=True, download=True, transform=transform_mnist)
+        mnist_test = datasets.MNIST(root="./data", train=False, download=True, transform=transform_mnist)
+
+        train_loader = DataLoader(mnist_train, batch_size=128, shuffle=True)
+        test_loader = DataLoader(mnist_test, batch_size=128, shuffle=False)
+
+    elif dataset == 1:
+
+        # CIFAR10
+        # Transformación temporal para calcular la media y la desviación típica
+        transform_temp = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()
+        ])
+
+        # Cargamos el dataset CIFAR10 con la transformación temporal
+        cifar_train_temp = datasets.CIFAR10(root="./data", train=True, download=True, transform=transform_temp)
+        loader_temp = DataLoader(cifar_train_temp, batch_size=128, shuffle=False)
+        mean, std = get_mean_std(loader_temp) # Calculamos la media y la desviación típica
+
+        print("CIFAR10 mean:", mean.tolist())
+        print("CIFAR10 std :", std.tolist())
+
+        # Transformación definitiva
+        transform_cifar = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean.tolist(), std.tolist()) # Normalizamos con la media y la desviación típica
+        ])
+
+        cifar_train = datasets.CIFAR10(root="./data", train=True, download=True, transform=transform_cifar)
+        cifar_test = datasets.CIFAR10(root="./data", train=False, download=True, transform=transform_cifar)
+
+        train_loader = DataLoader(cifar_train, batch_size=128, shuffle=True)
+        test_loader = DataLoader(cifar_test, batch_size=128, shuffle=False)
+
+    else:
+        raise ValueError("Valor inválido para el dataset. Usa 0 (MNIST) o 1 (CIFAR10).")
+
+    return train_loader, test_loader
+
+
+
 class ROLANN(nn.Module):
     def __init__(
         self,
@@ -205,54 +299,21 @@ class ROLANN(nn.Module):
         self._aggregate_parcial()  # New M and US added to old (global) ones
         self._calculate_weights()  # The weights are calculated with the new
 
+
 if __name__ == "__main__":
 
     # Dataset
-    dataset = 0  # 0: MNIST, 1: CIFAR10
+    dataset = 1  # 0: MNIST, 1: CIFAR10
+
+    try:
+        train_loader, test_loader = get_dataset(dataset)
+    except ValueError as e:
+        print(e)
 
     # Configuramos la GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if dataset == 0:
-
-        # Load MNIST dataset
-        transform_mnist = transforms.Compose(
-            [transforms.Resize((224, 224)),
-            transforms.Grayscale(num_output_channels=3),
-            transforms.ToTensor()]
-        )
-        mnist_train = datasets.MNIST(
-            root="./data", train=True, download=True, transform=transform_mnist
-        )
-        mnist_test = datasets.MNIST(
-            root="./data", train=False, download=True, transform=transform_mnist
-        )
-
-        # Cargamos los datos para el entrenamiento y test
-        train_loader = DataLoader(mnist_train, batch_size=128, shuffle=True)
-        test_loader = DataLoader(mnist_test, batch_size=128, shuffle=False)
-
-    elif dataset == 1:
-
-        # Load CIFAR10 dataset
-        transform_cifar = transforms.Compose(
-            [transforms.Resize((224, 224)),
-            transforms.ToTensor()]
-        )
-
-        cifar_train = datasets.CIFAR10(
-            root="./data", train=True, download=True, transform=transform_cifar
-        )
-        cifar_test = datasets.CIFAR10(
-            root="./data", train=False, download=True, transform=transform_cifar
-        )
-
-        # Cargamos los datos para el entrenamiento y test
-        train_loader = DataLoader(cifar_train, batch_size=128, shuffle=True)
-        test_loader = DataLoader(cifar_test, batch_size=128, shuffle=False)
-    else:
-        raise ValueError("Invalid dataset value.")
-
+    # Creamos el modelo
     resnet = resnet18(weights=ResNet18_Weights.DEFAULT) # Modelo ResNet18 preentrenado
     resnet.fc = nn.Identity() # Sustituimos la capa fc por una capa identidad
 
@@ -261,6 +322,8 @@ if __name__ == "__main__":
         param.requires_grad = False
 
     rolann = ROLANN(num_classes=10)
+
+    resnet.eval()  # Ponemos la ResNet en modo evaluación, quitamos capa de dropout y normalización
 
     resnet.to(device)  # Se sube la RESNET a la GPU
     rolann.to(device)  # Se sube la ROLANN a la GPU
