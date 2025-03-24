@@ -64,10 +64,21 @@ La clasificación se realiza con el modelo **ROLANN**, que aprende a partir de d
       param.requires_grad = False
   ```
 
-- Se pone en **modo evaluación** para que capas como `Dropout` o `BatchNorm` se comporten de forma fija:
+- Se activa el modo evaluación para que la ResNet deje de comportarse como si estuviera entrenando. Esto hace que capas como BatchNorm no cambien
+  su funcionamiento y mantengan los resultados estables:
   ```python
   resnet.eval()
   ```
+
+  ResNet18 contiene capas llamadas **Batch Normalization**, que ajustan internamente los datos con cada pasada.  
+  Aunque congelemos los pesos del modelo, estas capas **siguen actualizando estadísticas internas** (como la media y desviación) cada vez que se le pasan imágenes, por ejemplo en:
+  ```python
+  for x, y in train_loader:
+      caracteristicas = resnet(x)
+  ```
+  Esto puede provocar que las características extraídas cambien ligeramente con cada iteración, afectando al modelo ROLANN.
+
+  Usar `resnet.eval()` **frena esa actualización automática**, asegurando que la salida de ResNet sea siempre la misma durante el entrenamiento.
 
 - Durante la extracción de características, se desactiva el cálculo de gradientes:
   ```python
