@@ -128,3 +128,9 @@ model.to(device)
 ## ✅ Conclusiones
 
 - La incorporación de la **normalización automática** basada en el propio dataset mejora significativamente el rendimiento, especialmente en el caso de CIFAR10.
+
+## 📖 Bibliografía y Fuentes
+
+- [Calculo media y desviacion tipica](https://www.youtube.com/watch?v=y6IEcEBRZks)
+- [Eliminar capa de clasificacion en RESNET](https://stackoverflow.com/questions/52548174/how-to-remove-the-last-fc-layer-from-a-resnet-model-in-pytorch)
+- [Transformaciones en datasets](https://pytorch.org/vision/0.9/transforms.html)
