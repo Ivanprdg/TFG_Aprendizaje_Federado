@@ -18,59 +18,39 @@ from torchvision.models import resnet18, ResNet18_Weights
 import torch.nn as nn
 
 
-def get_mean_std(loader):
-    # Inicializamos sumadores
-    channels_sum = 0.0
-    channels_squared_sum = 0.0
-    num_batches = 0
-
-    # Recorremos el dataset para calcular la media y la desviación típica
-    for data, _ in tqdm(loader, desc="Calculando media y std"):
-        channels_sum += torch.mean(data, dim=[0, 2, 3]) # Media de cada canal
-        channels_squared_sum += torch.mean(data ** 2, dim=[0, 2, 3]) # Media de cada canal al cuadrado
-        num_batches += 1 # Contamos el número de batches, es decir, el número de veces que se ha ejecutado el bucle
-
-    mean = channels_sum / num_batches # Dividimos la suma de las medias de cada canal entre el número de batches
-    std = (channels_squared_sum / num_batches - mean ** 2) ** 0.5 # Calculamos la desviación típica
-
-    # Si es MNIST (1 canal), lo repetimos 3 veces para que coincida con RGB
-    if mean.numel() == 1:
-        mean = mean.repeat(3)
-        std = std.repeat(3)
-
-    return mean, std
-
-
 def get_dataset(dataset: int):
 
     if dataset == 0:
 
         # MNIST
         # Transformación temporal para calcular la media y la desviación típica
-        transform_temp = transforms.Compose([
+        transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.Grayscale(num_output_channels=3),
             transforms.ToTensor()
         ])
 
         # Cargamos el dataset MNIST con la transformación temporal
-        mnist_train_temp = datasets.MNIST(root="./data", train=True, download=True, transform=transform_temp)
-        loader_temp = DataLoader(mnist_train_temp, batch_size=128, shuffle=False)
-        mean, std = get_mean_std(loader_temp) # Calculamos la media y la desviación típica
+        mnist_train_dataset = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
 
-        print("MNIST mean:", mean.tolist())
-        print("MNIST std :", std.tolist())
+        # Calcular la media y la desviación típica
+        mnist_mean = (mnist_train_dataset.data / 255).mean(axis=(0, 1, 2))
+        mnist_std = (mnist_train_dataset.data / 255).std(axis=(0, 1, 2))
+
+        # Convertir a listas con 3 canales
+        mnist_mean_rgb = [mnist_mean] * 3
+        mnist_std_rgb = [mnist_std] * 3
+
+        print("MNIST mean RGB:", mnist_mean_rgb)
+        print("MNIST std RGB:", mnist_std_rgb)
 
         # Transformación definitiva
-        transform_mnist = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Grayscale(num_output_channels=3), # Añadimos el canal RGB
-            transforms.ToTensor(),
-            transforms.Normalize(mean.tolist(), std.tolist())
-        ])
+        transform.transforms.append(
+            transforms.Normalize(mean=mnist_mean_rgb, std=mnist_std_rgb)
+        )
 
-        mnist_train = datasets.MNIST(root="./data", train=True, download=True, transform=transform_mnist)
-        mnist_test = datasets.MNIST(root="./data", train=False, download=True, transform=transform_mnist)
+        mnist_train = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
+        mnist_test = datasets.MNIST(root="./data", train=False, download=True, transform=transform)
 
         train_loader = DataLoader(mnist_train, batch_size=128, shuffle=True)
         test_loader = DataLoader(mnist_test, batch_size=128, shuffle=False)
@@ -79,28 +59,27 @@ def get_dataset(dataset: int):
 
         # CIFAR10
         # Transformación temporal para calcular la media y la desviación típica
-        transform_temp = transforms.Compose([
+        transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor()
         ])
 
         # Cargamos el dataset CIFAR10 con la transformación temporal
-        cifar_train_temp = datasets.CIFAR10(root="./data", train=True, download=True, transform=transform_temp)
-        loader_temp = DataLoader(cifar_train_temp, batch_size=128, shuffle=False)
-        mean, std = get_mean_std(loader_temp) # Calculamos la media y la desviación típica
+        cifar_train_dataset = datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
 
-        print("CIFAR10 mean:", mean.tolist())
-        print("CIFAR10 std :", std.tolist())
+        cifar_mean = (cifar_train_dataset.data / 255).mean(axis=(0, 1, 2))
+        cifar_std = (cifar_train_dataset.data / 255).std(axis=(0, 1, 2))
+
+        print("CIFAR10 mean RGB:", cifar_mean)
+        print("CIFAR10 std RGB:", cifar_std)
 
         # Transformación definitiva
-        transform_cifar = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean.tolist(), std.tolist()) # Normalizamos con la media y la desviación típica
-        ])
-
-        cifar_train = datasets.CIFAR10(root="./data", train=True, download=True, transform=transform_cifar)
-        cifar_test = datasets.CIFAR10(root="./data", train=False, download=True, transform=transform_cifar)
+        transform.transforms.append(
+            transforms.Normalize(mean=cifar_mean, std=cifar_std)
+        )
+ 
+        cifar_train = datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
+        cifar_test = datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
 
         train_loader = DataLoader(cifar_train, batch_size=128, shuffle=True)
         test_loader = DataLoader(cifar_test, batch_size=128, shuffle=False)
@@ -303,12 +282,13 @@ class ROLANN(nn.Module):
 if __name__ == "__main__":
 
     # Dataset
-    dataset = 1  # 0: MNIST, 1: CIFAR10
+    dataset = 0  # 0: MNIST, 1: CIFAR10
 
     try:
         train_loader, test_loader = get_dataset(dataset)
     except ValueError as e:
-        print(e)
+        print(f"Error al cargar el dataset: {e}")
+        exit()
 
     # Configuramos la GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

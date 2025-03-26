@@ -1,6 +1,6 @@
 # 🧠 TFG - Aprendizaje Federado
 
-📅 **Actualización:** 24/03  
+📅 **Actualización:** 25/03  
 🔧 **Rama:** `feature/Implementar_vector_caracteristicas`
 
 ---
@@ -30,10 +30,26 @@ La clasificación se realiza con el modelo **ROLANN**, que aprende a partir de d
 ### 🗂️ Adaptación y Normalización de Datos
 
 #### ✅ Preprocesamiento automático
-- Se ha creado la función `get_mean_std()` que calcula de forma precisa la **media y desviación típica por canal** sobre un dataset temporal.
-- Estos valores se utilizan para normalizar cada imagen con:
+- Se ha calculado la **media** y la **desviación típica** de los valores de píxel dividiendo primero las imágenes por 255 (para llevar sus valores al rango [0, 1]). Luego se calcula el promedio y la desviación de todos los píxeles del dataset, incluyendo todas las imágenes, la altura y la anchura **axis=(0,1,2)**:
+
   ```python
-  transforms.Normalize(mean.tolist(), std.tolist())
+  mean = (dataset.data / 255).mean(axis=(0, 1, 2))
+  std = (dataset.data / 255).std(axis=(0, 1, 2))
+  ```
+
+  Esto permite obtener una referencia común de brillo y contraste que se usará después para normalizar las imágenes. Así, los datos estarán centrados y distribuidos de forma estable para que la red los entienda mejor.
+
+- En el caso de **MNIST**, al tener un único canal, se replica el valor 3 veces para simular una imagen RGB compatible con ResNet18:
+
+  ```python
+  mean_rgb = [mean] * 3
+  std_rgb = [std] * 3
+  ```
+
+- Estos valores se utilizan posteriormente en la transformación de normalización con:
+
+  ```python
+  transforms.Normalize(mean_rgb, std_rgb)
   ```
 
 #### 🖼️ MNIST
@@ -118,20 +134,20 @@ model.to(device)
 
 ---
 
-### **24/03** (con normalización automática y mejoras):
+### **25/03** (con normalización automática y mejoras):
 
 - **MNIST**:
 
 | Métrica            | Valor   |
 |--------------------|---------|
-| Training Accuracy  | 0.9677  |
-| Test Accuracy      | 0.9658  |
+| Training Accuracy  | 0.9678  |
+| Test Accuracy      | 0.9664  |
 
 - **CIFAR10**:
 
 | Métrica            | Valor   |
 |--------------------|---------|
-| Training Accuracy  | 0.8457  |
+| Training Accuracy  | 0.8460  |
 | Test Accuracy      | 0.8372  |
 
 ---
@@ -142,6 +158,5 @@ model.to(device)
 
 ## 📖 Bibliografía y Fuentes
 
-- [Calculo media y desviacion tipica](https://www.youtube.com/watch?v=y6IEcEBRZks)
 - [Eliminar capa de clasificacion en RESNET](https://stackoverflow.com/questions/52548174/how-to-remove-the-last-fc-layer-from-a-resnet-model-in-pytorch)
 - [Transformaciones en datasets](https://pytorch.org/vision/0.9/transforms.html)
