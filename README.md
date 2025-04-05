@@ -178,16 +178,19 @@ mg_tensor_list = [m if isinstance(m, torch.Tensor) else torch.tensor(m, device=s
 | Training Accuracy  | 0.8460  |
 | Test Accuracy      | 0.8372  |
 
+---
 
 ### Versión Federada (07/04):
 
 - **MNIST**:
+
 | Métrica            | Valor   |
 |--------------------|---------|
 | Training Accuracy  | 0.9685  |
 | Test Accuracy      | 0.9673  |
 
 - **CIFAR10**:
+
 | Métrica            | Valor   |
 |--------------------|---------|
 | Training Accuracy  | 0.8459  |
