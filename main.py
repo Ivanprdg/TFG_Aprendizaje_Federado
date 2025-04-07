@@ -95,8 +95,8 @@ def main():
         return correct / total
 
     print("Evaluando el modelo global...")
-    train_acc = evaluate(coordinador.rolann, clientes[0].resnet, train_loader)
-    test_acc = evaluate(coordinador.rolann, clientes[0].resnet, test_loader)
+    train_acc = evaluate(coordinador.rolann, coordinador.resnet, train_loader)
+    test_acc = evaluate(coordinador.rolann, coordinador.resnet, test_loader)
 
     print(f"Training Accuracy: {train_acc:.4f}")
     print(f"Test Accuracy: {test_acc:.4f}")
