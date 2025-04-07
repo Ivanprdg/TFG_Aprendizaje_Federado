@@ -81,11 +81,11 @@ class Coordinador:
                 self.U_glb[c] = U
                 self.S_glb[c] = S
 
-        self.actualizar_modelo_global(self.M_glb, self.U_glb, self.S_glb)
+        self.update_global(self.M_glb, self.U_glb, self.S_glb)
 
 
 
-    def actualizar_modelo_global(self, mg_list, ug_list, sg_list):
+    def update_global(self, mg_list, ug_list, sg_list):
         """
         Actualiza el modelo global de ROLANN con las matrices globales calculadas.
         """        
