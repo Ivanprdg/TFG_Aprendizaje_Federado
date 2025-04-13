@@ -18,9 +18,7 @@ class Cliente:
         for param in self.resnet.parameters():
             param.requires_grad = False  # Congelamos la ResNet
 
-        self.resnet.to(self.device)
         self.resnet.eval()
-
         self.rolann.to(self.device)  # Aseguramos que ROLANN esté en el mismo dispositivo
 
     
@@ -29,6 +27,8 @@ class Cliente:
         Recorre el dataset local, extrae las características usando la ResNet propia y
         actualiza la capa ROLANN
         """
+        self.resnet.to(self.device) # Mover al training y pasar a cpu al terminar training
+
         for x, y in tqdm(self.loader):
 
             x = x.to(self.device)
@@ -40,12 +40,15 @@ class Cliente:
             label = (torch.nn.functional.one_hot(y, num_classes=10) * 0.9 + 0.05).to(self.device)
             self.rolann.aggregate_update(features, label)
 
+        # Movemos la resnet a cpu
+        self.resnet.to("cpu")
+
     def aggregate_parcial(self):
         """
         Devuelve las matrices acumuladas M y US para cada clase
         """
         # Devuelve las matrices acumuladas M y US para cada clase
         local_M = self.rolann.mg
-        local_US = [self.rolann.ug[i] @ torch.diag(self.rolann.sg[i].clone().detach()) for i in range(self.rolann.num_classes)]
+        local_US = [torch.matmul(self.rolann.ug[i], torch.diag(self.rolann.sg[i].clone().detach())) for i in range(self.rolann.num_classes)]
 
         return local_M, local_US

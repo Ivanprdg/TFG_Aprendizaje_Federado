@@ -68,9 +68,16 @@ class Coordinador:
                 else:
                     US_np = US
 
-                U, S, _ = sp.linalg.svd(np.concatenate((US_k_np, US_np), axis=1), full_matrices=False)
-                US = U @ np.diag(S)
-            
+
+                # Concatenar a lo largo de las columnas
+                concatenated = torch.cat((US_k_np, US_np), dim=1)
+
+                # SVD
+                U, S, _ = torch.linalg.svd(concatenated, full_matrices=False)
+
+                # Multiplicación matricial sin usar @
+                US = torch.matmul(U, torch.diag(S))
+
             # Save contents
             if init:
                 self.M_glb.append(M)
