@@ -1,7 +1,7 @@
 # 🧠 TFG - Aprendizaje Federado
 
-📅 **Actualización:** 25/03  
-🔧 **Rama:** `feature/Implementar_vector_caracteristicas`
+📅 **Actualización:** 07/04/2024  
+🔧 **Rama:** `Implementar_version_federada_local`
 
 ---
 
@@ -114,6 +114,34 @@ model.to(device)
 
 ---
 
+## 🚀 **Implementación Federada**
+
+### 🔄 División del dataset entre clientes
+El dataset se divide equitativamente entre múltiples clientes:
+```python
+dataset_dividido = random_split(dataset, batch_size)
+```
+
+### 📡 Cliente
+Cada cliente posee:
+- Una instancia propia de ResNet18 (congelada y en modo evaluación).
+- Una instancia propia del modelo ROLANN.
+
+Cada cliente entrena localmente su instancia de ROLANN usando las características extraídas por su ResNet local y posteriormente envía sus matrices locales (`M`, `U`, `S`) al Coordinador.
+
+### 🗃️ Coordinador
+- Recibe y acumula matrices (`M`, `U`, `S`) de cada cliente.
+- Realiza la agregación global usando SVD sobre las matrices recibidas.
+- Actualiza la instancia global del modelo ROLANN con las matrices agregadas.
+
+### 🛠️ Manejo de dispositivos
+- El coordinador asegura que todas las matrices se encuentren en el mismo dispositivo (CPU/GPU) antes de realizar cálculos, evitando errores de incompatibilidad.
+```python
+mg_tensor_list = [m if isinstance(m, torch.Tensor) else torch.tensor(m, device=self.device) for m in mg_list]
+```
+
+---
+
 ## 📈 Resultados
 
 ### **22/03** (antes de normalizar correctamente):
@@ -152,11 +180,31 @@ model.to(device)
 
 ---
 
+### Versión Federada (07/04):
+
+- **MNIST**:
+
+| Métrica            | Valor   |
+|--------------------|---------|
+| Training Accuracy  | 0.9685  |
+| Test Accuracy      | 0.9673  |
+
+- **CIFAR10**:
+
+| Métrica            | Valor   |
+|--------------------|---------|
+| Training Accuracy  | 0.8459  |
+| Test Accuracy      | 0.8384  |
+
+---
+
 ## ✅ Conclusiones
 
 - La incorporación de la **normalización automática** basada en el propio dataset mejora significativamente el rendimiento, especialmente en el caso de CIFAR10.
+- La implementación federada muestra un rendimiento equivalente o ligeramente mejor comparado con el enfoque centralizado, validando así su eficacia.
 
 ## 📖 Bibliografía y Fuentes
 
 - [Eliminar capa de clasificacion en RESNET](https://stackoverflow.com/questions/52548174/how-to-remove-the-last-fc-layer-from-a-resnet-model-in-pytorch)
 - [Transformaciones en datasets](https://pytorch.org/vision/0.9/transforms.html)
+- [Uso de random_split](https://pytorch.org/docs/stable/data.html)
