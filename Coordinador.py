@@ -56,21 +56,19 @@ class Coordinador:
             for M_k, US_k in zip(M_rest, US_rest):
                 M = M + M_k
                 
-                # Conversión robusta de US_k
-                if isinstance(US_k, torch.Tensor):
-                    US_k_np = US_k.cpu().numpy()
+                # Convertir ambos a tensores en el dispositivo correcto
+                if not isinstance(US_k, torch.Tensor):
+                    US_k = torch.from_numpy(US_k).to(self.device)
                 else:
-                    US_k_np = US_k
-                
-                # Conversión robusta de US
-                if isinstance(US, torch.Tensor):
-                    US_np = US.cpu().numpy()
+                    US_k = US_k.to(self.device)
+
+                if not isinstance(US, torch.Tensor):
+                    US = torch.from_numpy(US).to(self.device)
                 else:
-                    US_np = US
+                    US = US.to(self.device)
 
-
-                # Concatenar a lo largo de las columnas
-                concatenated = torch.cat((US_k_np, US_np), dim=1)
+                # Concatenar en la dimensión de columnas
+                concatenated = torch.cat((US_k, US), dim=1)
 
                 # SVD
                 U, S, _ = torch.linalg.svd(concatenated, full_matrices=False)
