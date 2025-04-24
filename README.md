@@ -196,6 +196,32 @@ mg_tensor_list = [m if isinstance(m, torch.Tensor) else torch.tensor(m, device=s
 | Training Accuracy  | 0.8459  |
 | Test Accuracy      | 0.8384  |
 
+
+### Resultados de la Experimentación
+
+#### Dataset: MNIST
+
+|   Número de Clientes | Tipo de Partición   |   Training Accuracy |   Test Accuracy |
+|----------------------|---------------------|---------------------|-----------------|
+|                    4 | Dirichlet (α=0.3)   |              0.9684 |          0.9664 |
+|                    4 | Class Less          |              0.6957 |          0.6948 |
+|                    8 | Dirichlet (α=0.3)   |              0.9687 |          0.967  |
+|                    8 | Class Less          |              0.9524 |          0.9485 |
+|                   12 | Dirichlet (α=0.3)   |              0.9686 |          0.967  |
+|                   12 | Class Less          |              0.9585 |          0.9577 |
+
+#### Dataset: CIFAR-10
+
+|   Número de Clientes | Tipo de Partición   |   Training Accuracy |   Test Accuracy |
+|----------------------|---------------------|---------------------|-----------------|
+|                    4 | Dirichlet (α=0.3)   |              0.8456 |          0.8376 |
+|                    4 | Class Less          |              0.6783 |          0.6748 |
+|                    8 | Dirichlet (α=0.3)   |              0.8455 |          0.8379 |
+|                    8 | Class Less          |              0.8238 |          0.8167 |
+|                   12 | Dirichlet (α=0.3)   |              0.8457 |          0.838  |
+|                   12 | Class Less          |              0.8227 |          0.8108 |
+
+
 ---
 
 ## ✅ Conclusiones
