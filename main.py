@@ -10,96 +10,157 @@ import matplotlib.pyplot as plt
 import numpy as np
 from torch.utils.data import Subset
 
-def non_iid_dirichlet_partition(dataset, num_clients, alpha):
+# Reparticion de datos no-IID dirichlet, cada cliente tiene al menos una muestra de cada clase
+def non_iid_dirichlet_partition(dataset, num_clients, alpha): 
 
-    # Extraemos las etiquetas del dataset como array de NumPy
-    targets = np.asarray(dataset.targets)
-
-    # Obtenemos el número de clases
-    num_classes = len(np.unique(targets))
-
-    # Lista de listas de índices para cada clase
-    class_indices = [np.where(targets == i)[0] for i in range(num_classes)]
-
-    # Inicializamos una lista vacía por cliente
+    targets = np.asarray(dataset.targets) # Convertimos a array de NumPy
+    num_classes = len(np.unique(targets)) # Obtenemos el número de clases
+    
+    # Creamos una lista de indices para cada clase
+    class_indices = [np.where(targets == c)[0].tolist() for c in range(num_classes)]
+    # Inicializamos la lista de indices por cliente
     client_indices = [[] for _ in range(num_clients)]
 
-    # Distribuimos cada clase entre los clientes
-    for c in range(num_classes):
-        np.random.shuffle(class_indices[c])  # evitar bloques consecutivos
-        proportions = np.random.dirichlet(alpha * np.ones(num_clients))
+    for c in range(num_classes): # Para cada clase
+        idxs = class_indices[c] # Obtenemos los indices de la clase c
+        np.random.shuffle(idxs) # Barajamos los indices de la clase c para luego cortar bloques con datos mezclados
+        N = len(idxs) # Obtenemos el numero de muestras de la clase c
 
-        # Transforma proporciones a enteros para saber cuántos ejemplos asignar a cada cliente
-        proportions = (np.cumsum(proportions) * len(class_indices[c])).astype(int)[:-1]
+        # Muestreamos proporciones Dirichlet
+        props = np.random.dirichlet(alpha * np.ones(num_clients))
+        raw = props * N # Obtenemos las proporciones de cada cliente
 
-        # Toma el array de indices de la clase c y lo divide entre los clientes en funcion de las proporciones
-        splits = np.split(class_indices[c], proportions)
+        # Aseguramos que cada cliente tiene al menos una muestra de la clase c
+        counts = np.floor(raw).astype(int)
+        counts[counts == 0] = 1
 
-        for i, split in enumerate(splits):
-            client_indices[i].extend(split.tolist()) # Agrega los indices (posicion imagen) a la lista del cliente correspondiente
+        # Ajustamos para que sum(counts) == N
+        residual = raw - np.floor(raw)
+        total = counts.sum()
+        # si faltan muestras, vamos añadiendo a los mayores residuals
+        while total < N:
+            i = np.argmax(residual)
+            counts[i] += 1
+            residual[i] = 0
+            total += 1
+        # si sobran, quitamos de los menores residuals (pero sin caer bajo 1)
+        while total > N:
+
+            validos = counts > 1 # nos aseguramos de que no caiga por debajo de 1
+
+            # entre ellos, buscamos el más pequeño residual
+            j = np.argmin(np.where(validos, residual, np.inf))
+            counts[j] -= 1 # quitamos una muestra al cliente j
+            residual[j] = 1  # lo marcamos como ya quitado
+            total -= 1 # restamos una muestra al total
+
+        # A partir de counts, hacemos splits “manuales”
+        start = 0
+        for client_id, cnt in enumerate(counts):
+            if cnt > 0: # si el cliente tiene muestras de la clase c
+                split = idxs[start:start + cnt] # Obtenemos los indices de la clase c para el cliente client_id
+                client_indices[client_id].extend(split) # Añadimos los indices al cliente
+                start += cnt # Aumentamos el inicio para la siguiente clase
 
     return client_indices
 
-  
-def non_iid_class_less_partition(dataset, num_clients, classes_per_client=2):
 
-    # Extraemos las etiquetas del dataset como array de NumPy
-    targets = np.asarray(dataset.targets)
-    num_classes = len(np.unique(targets))
+# Reparto no-IID “class-less”: Los clientes tienen al menos una clase, pero no todas las clases
+def non_iid_class_less_partition(dataset, num_clients, alpha=0.5):
 
-    # Creamos un diccionario que guarda los índices de cada clase
-    class_indices = {}
-    for i in range(num_classes):
-        indices = np.where(targets == i)[0]
-        class_indices[i] = indices.tolist()
+    targets = np.asarray(dataset.targets) # Convertimos a array de NumPy
+    num_classes = len(np.unique(targets)) # Obtenemos el número de clases
 
-    # Inicializamos una lista vacía por cliente para guardar sus índices
+    # Creamos una lista de indices para cada clase
+    class_indices = [np.where(targets == c)[0] for c in range(num_classes)]
+    all_classes = set(range(num_classes)) # Aqui guardamos todas las clases
+
+    # Cada cliente coge entre 1 y num_classes-1 clases al azar
+    client_classes = []
+    for i in range(num_clients):
+        k = np.random.randint(1, num_classes)  # tamaño del subconjunto
+        client_classes.append(set(np.random.choice(num_classes, size=k, replace=False))) # set hace que no haya duplicados
+
+    # Si la union detecta que union != num_classes asignamos cada clase faltante
+    union = set().union(*client_classes)
+    missing = all_classes - union
+    for clase in missing:
+        # elige un cliente que aun no tenga todas las clases
+        candidatos = [i for i, s in enumerate(client_classes) if len(s) < num_classes-1]
+        elegido = np.random.choice(candidatos)
+        client_classes[elegido].add(clase)
+
+    # Evitar que algun cliente tenga todas las clases
+    for i, s in enumerate(client_classes):
+        if len(s) == num_classes: # si tiene todas las clases
+            # elige una clase compartida (otro cliente tambien la tiene)
+            compartidas = [c for c in s if sum(1 for s2 in client_classes if c in s2) > 1] # El if comprueba que la clase esta en mas de un cliente
+            drop = np.random.choice(compartidas)
+            s.remove(drop)
+
+    # Reparto de indices por Dirichlet
     client_indices = [[] for i in range(num_clients)]
-
-    # Asignamos a cada cliente un subconjunto aleatorio de clases
-    for client_id in range(num_clients):
-
-        # Determina que clases le tocan al cliente (al azar)
-        classes = np.random.choice(num_classes, classes_per_client, replace=False) # classes es un array de enteros con las clases
-
-        for cls in classes:
-            # Verificamos que haya suficientes muestras disponibles en la clase
-            if len(class_indices[cls]) >= num_clients:
-                take = len(class_indices[cls]) // num_clients # Tomamos un número proporcional de muestras
-            else:
-                take = min(len(class_indices[cls]), 1)  # Toma el mínimo entre el número de muestras disponibles y 1 (puede ser 0)
-
-            # Seleccionamos los índices para este cliente y actualizamos las listas
-            selected = class_indices[cls][:take]
-            client_indices[client_id].extend(selected)
-            class_indices[cls] = class_indices[cls][take:]
+    for c, idxs in enumerate(class_indices):
+        np.random.shuffle(idxs)
+        clientes = [i for i, s in enumerate(client_classes) if c in s] 
+        props = np.random.dirichlet(alpha * np.ones(len(clientes)))
+        cuts = (np.cumsum(props) * len(idxs)).astype(int)[:-1]
+        splits = np.split(idxs, cuts)
+        for client_id, split in zip(clientes, splits): # asignamos los indices a los clientes
+            client_indices[client_id].extend(split.tolist())
 
     return client_indices
 
 
 def plot_client_distributions(client_indices, dataset, title="Distribución de clases por cliente"):
+
     num_clients = len(client_indices)
+    targets = np.array(list(dataset.targets))
+
+    # Contar por cliente y clase
     class_counts = []
-    targets = np.array(dataset.targets)
+    num_classes = len(np.unique(targets))
     for indices in client_indices:
         labels = targets[indices]
-        count = Counter(labels)
-        class_counts.append([count.get(i, 0) for i in range(10)])
+        cnt = Counter(labels)
+        class_counts.append([cnt.get(c, 0) for c in range(num_classes)])
+    data = np.array(class_counts)  # shape (num_clients, num_classes)
 
-    data = np.array(class_counts)
-    for i in range(10):
-        plt.bar(range(num_clients), data[:, i], bottom=np.sum(data[:, :i], axis=1), label=f'Clase {i}')
+    fig, ax = plt.subplots(figsize=(8, 5))
 
-    plt.xlabel("Cliente")
-    plt.ylabel("Número de muestras")
-    plt.title(title)
-    plt.legend()
+    # Barras apiladas
+    bottoms = np.zeros(num_clients, dtype=int)
+    for cls in range(num_classes):
+        ax.bar(
+            range(num_clients),
+            data[:, cls],
+            bottom=bottoms,
+            label=f"Clase {cls}"
+        )
+        bottoms += data[:, cls]
+
+    # Etiquetas del eje X solo en enteros
+    ax.set_xticks(range(num_clients))
+    ax.set_xticklabels([f"Cliente {i+1}" for i in range(num_clients)])
+
+    # Ajustar límites
+    ax.set_xlim(-0.5, num_clients - 0.5)
+
+    ax.grid(axis="y", linestyle="--", alpha=0.6)
+
+    ax.legend(ncol=2, bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False)
+
+    ax.set_xlabel("Cliente")
+    ax.set_ylabel("Número de muestras")
+    ax.set_title(title)
+
     plt.tight_layout()
     plt.show()
 
+
 def main():
     # Dataset
-    dataset = 1  # 0: MNIST, 1: CIFAR10
+    dataset = 0  # 0: MNIST, 1: CIFAR10
 
     try:
         # Obtenemos el conjunto de imagenes a repartir y los loaders para la evaluación
@@ -115,12 +176,12 @@ def main():
     coordinador = Coordinador(ROLANN(num_classes=10), device)
 
     # Numero de clientes que queremos crear
-    num_clientes = 12
+    num_clientes = 4
     clientes = [] # Lista de clientes
 
     # Cada cliente tendrá un subconjunto del dataset, su propia ResNet y su propio ROLANN
 
-    partition_type = "class_less"  # "iid", "dirichlet", "class_less"
+    partition_type = "dirichlet"  # "iid", "dirichlet", "class_less"
 
     if partition_type == "iid":
 
@@ -152,18 +213,27 @@ def main():
         plot_client_distributions(client_indices, train_imgs, "Distribución IID")
 
     elif partition_type == "dirichlet":
-        client_indices = non_iid_dirichlet_partition(train_imgs, num_clientes, alpha=0.3)
+
+        alpha = 0.3
+
+        client_indices = non_iid_dirichlet_partition(train_imgs, num_clientes, alpha=alpha)
 
         # Crear un subconjunto de datos para cada cliente en función de los índices
         client_subsets = [Subset(train_imgs, indices) for indices in client_indices] 
         plot_client_distributions(client_indices, train_imgs, "Dirichlet α=0.3")
 
-    elif partition_type == "class_less":
-        client_indices = non_iid_class_less_partition(train_imgs, num_clientes, classes_per_client=3)
+    elif partition_type == "class_less": # Añdir Variable clases privadas
 
-        # Crear un subconjunto de datos para cada cliente en función de los índices
+        alpha = 0.5
+
+        # Reparto no-IID “class-less”:
+        client_indices = non_iid_class_less_partition(train_imgs, num_clientes, alpha=alpha)
+
+        # Crear un subconjunto de datos para cada cliente a partir de los índices
         client_subsets = [Subset(train_imgs, indices) for indices in client_indices]
-        plot_client_distributions(client_indices, train_imgs, "Class Less (sin todas las clases)")
+
+        # Visualizar la distribución (ningún cliente tendrá todas las clases y todos los clientes tendrán al menos una clase)
+        plot_client_distributions(client_indices, train_imgs, f"Class-Less α={alpha}")
 
     else:
         print("Tipo de partición no soportado. Usa 'iid', 'dirichlet' o 'class_less'")
@@ -197,25 +267,9 @@ def main():
     print("Agregación global completada.")
 
 
-    def evaluate(model_rolann, model_resnet, loader): # Añadimos el modelo de ResNet18
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for x, y in loader:
-
-                x = x.to(device) # Subimos los datos a la GPU
-                y = y.to(device) # Subimos las etiquetas a la GPU
-
-                caracterisiticas = model_resnet(x) # Obtenemos las características de la ResNet18
-                preds = model_rolann(caracterisiticas) # Obtenemos las predicciones de la ROLANNs
-
-                correct += (preds.argmax(dim=1) == y).sum().item()
-                total += y.size(0)
-        return correct / total
-
     print("Evaluando el modelo global...")
-    train_acc = evaluate(coordinador.rolann, coordinador.resnet, train_loader)
-    test_acc = evaluate(coordinador.rolann, coordinador.resnet, test_loader)
+    train_acc = coordinador.evaluate(train_loader)
+    test_acc = coordinador.evaluate(test_loader)
 
     print(f"Training Accuracy: {train_acc:.4f}")
     print(f"Test Accuracy: {test_acc:.4f}")
