@@ -106,3 +106,19 @@ class Coordinador:
         # Recalcula los pesos globales en base a las nuevas matrices agregadas
         self.rolann._calculate_weights()
 
+
+    def evaluate(self, loader): # Añadimos el modelo de ResNet18
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for x, y in loader:
+
+                x = x.to(self.device) # Subimos los datos a la GPU
+                y = y.to(self.device) # Subimos las etiquetas a la GPU
+
+                caracterisiticas = self.resnet(x) # Obtenemos las características de la ResNet18
+                preds = self.rolann(caracterisiticas) # Obtenemos las predicciones de la ROLANNs
+
+                correct += (preds.argmax(dim=1) == y).sum().item()
+                total += y.size(0)
+        return correct / total

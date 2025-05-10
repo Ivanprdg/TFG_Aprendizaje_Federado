@@ -5,9 +5,162 @@ from Coordinador import Coordinador
 from datasets import get_dataset
 from torch.utils.data import random_split
 
+from collections import Counter
+import matplotlib.pyplot as plt
+import numpy as np
+from torch.utils.data import Subset
+
+# Reparticion de datos no-IID dirichlet, cada cliente tiene al menos una muestra de cada clase
+def non_iid_dirichlet_partition(dataset, num_clients, alpha): 
+
+    targets = np.asarray(dataset.targets) # Convertimos a array de NumPy
+    num_classes = len(np.unique(targets)) # Obtenemos el número de clases
+    
+    # Creamos una lista de indices para cada clase
+    class_indices = [np.where(targets == c)[0].tolist() for c in range(num_classes)]
+    # Inicializamos la lista de indices por cliente
+    client_indices = [[] for _ in range(num_clients)]
+
+    for c in range(num_classes): # Para cada clase
+        idxs = class_indices[c] # Obtenemos los indices de la clase c
+        np.random.shuffle(idxs) # Barajamos los indices de la clase c para luego cortar bloques con datos mezclados
+        N = len(idxs) # Obtenemos el numero de muestras de la clase c
+
+        # Muestreamos proporciones Dirichlet
+        props = np.random.dirichlet(alpha * np.ones(num_clients))
+        raw = props * N # Obtenemos las proporciones de cada cliente
+
+        # Aseguramos que cada cliente tiene al menos una muestra de la clase c
+        counts = np.floor(raw).astype(int)
+        counts[counts == 0] = 1
+
+        # Ajustamos para que sum(counts) == N
+        residual = raw - np.floor(raw)
+        total = counts.sum()
+        # si faltan muestras, vamos añadiendo a los mayores residuals
+        while total < N:
+            i = np.argmax(residual)
+            counts[i] += 1
+            residual[i] = 0
+            total += 1
+        # si sobran, quitamos de los menores residuals (pero sin caer bajo 1)
+        while total > N:
+
+            validos = counts > 1 # nos aseguramos de que no caiga por debajo de 1
+
+            # entre ellos, buscamos el más pequeño residual
+            j = np.argmin(np.where(validos, residual, np.inf))
+            counts[j] -= 1 # quitamos una muestra al cliente j
+            residual[j] = 1  # lo marcamos como ya quitado
+            total -= 1 # restamos una muestra al total
+
+        # A partir de counts, hacemos splits “manuales”
+        start = 0
+        for client_id, cnt in enumerate(counts):
+            if cnt > 0: # si el cliente tiene muestras de la clase c
+                split = idxs[start:start + cnt] # Obtenemos los indices de la clase c para el cliente client_id
+                client_indices[client_id].extend(split) # Añadimos los indices al cliente
+                start += cnt # Aumentamos el inicio para la siguiente clase
+
+    return client_indices
+
+
+# Reparto no-IID “class-less”: Los clientes tienen al menos una clase, pero no todas las clases
+def non_iid_class_less_partition(dataset, num_clients, alpha=0.5):
+
+    targets = np.asarray(dataset.targets) # Convertimos a array de NumPy
+    num_classes = len(np.unique(targets)) # Obtenemos el número de clases
+
+    # Creamos una lista de indices para cada clase
+    class_indices = [np.where(targets == c)[0] for c in range(num_classes)]
+    all_classes = set(range(num_classes)) # Aqui guardamos todas las clases
+
+    # Cada cliente coge entre 1 y num_classes-1 clases al azar
+    client_classes = []
+    for i in range(num_clients):
+        k = np.random.randint(1, num_classes)  # tamaño del subconjunto
+        client_classes.append(set(np.random.choice(num_classes, size=k, replace=False))) # set hace que no haya duplicados
+
+    # Si la union detecta que union != num_classes asignamos cada clase faltante
+    union = set().union(*client_classes)
+    missing = all_classes - union
+    for clase in missing:
+        # elige un cliente que aun no tenga todas las clases
+        candidatos = [i for i, s in enumerate(client_classes) if len(s) < num_classes-1]
+        elegido = np.random.choice(candidatos)
+        client_classes[elegido].add(clase)
+
+    # Evitar que algun cliente tenga todas las clases
+    for i, s in enumerate(client_classes):
+        if len(s) == num_classes: # si tiene todas las clases
+            # elige una clase compartida (otro cliente tambien la tiene)
+            compartidas = [c for c in s if sum(1 for s2 in client_classes if c in s2) > 1] # El if comprueba que la clase esta en mas de un cliente
+            drop = np.random.choice(compartidas)
+            s.remove(drop)
+
+    # Reparto de indices por Dirichlet
+    client_indices = [[] for i in range(num_clients)]
+    for c, idxs in enumerate(class_indices):
+        np.random.shuffle(idxs)
+        clientes = [i for i, s in enumerate(client_classes) if c in s] 
+        props = np.random.dirichlet(alpha * np.ones(len(clientes)))
+        cuts = (np.cumsum(props) * len(idxs)).astype(int)[:-1]
+        splits = np.split(idxs, cuts)
+        for client_id, split in zip(clientes, splits): # asignamos los indices a los clientes
+            client_indices[client_id].extend(split.tolist())
+
+    return client_indices
+
+
+def plot_client_distributions(client_indices, dataset, title="Distribución de clases por cliente"):
+
+    num_clients = len(client_indices)
+    targets = np.array(list(dataset.targets))
+
+    # Contar por cliente y clase
+    class_counts = []
+    num_classes = len(np.unique(targets))
+    for indices in client_indices:
+        labels = targets[indices]
+        cnt = Counter(labels)
+        class_counts.append([cnt.get(c, 0) for c in range(num_classes)])
+    data = np.array(class_counts)  # shape (num_clients, num_classes)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Barras apiladas
+    bottoms = np.zeros(num_clients, dtype=int)
+    for cls in range(num_classes):
+        ax.bar(
+            range(num_clients),
+            data[:, cls],
+            bottom=bottoms,
+            label=f"Clase {cls}"
+        )
+        bottoms += data[:, cls]
+
+    # Etiquetas del eje X solo en enteros
+    ax.set_xticks(range(num_clients))
+    ax.set_xticklabels([f"Cliente {i+1}" for i in range(num_clients)])
+
+    # Ajustar límites
+    ax.set_xlim(-0.5, num_clients - 0.5)
+
+    ax.grid(axis="y", linestyle="--", alpha=0.6)
+
+    ax.legend(ncol=2, bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False)
+
+    ax.set_xlabel("Cliente")
+    ax.set_ylabel("Número de muestras")
+    ax.set_title(title)
+
+    plt.tight_layout()
+    plt.show()
+
+
 def main():
     # Dataset
-    dataset = 1  # 0: MNIST, 1: CIFAR10
+    dataset = 0  # 0: MNIST, 1: CIFAR10
 
     try:
         # Obtenemos el conjunto de imagenes a repartir y los loaders para la evaluación
@@ -27,35 +180,71 @@ def main():
     clientes = [] # Lista de clientes
 
     # Cada cliente tendrá un subconjunto del dataset, su propia ResNet y su propio ROLANN
-    # Creamos los subconjuntos de datos para cada cliente
-    dataset_size = len(train_imgs)
-    print(f"Dataset size: {dataset_size}")
 
-    batch_size = [dataset_size // num_clientes] * num_clientes # Creamos una lista con el tamaño del batch para cada cliente
-    resto = dataset_size % num_clientes
-    print(f"Batch size: {batch_size}")
-    print(f"Resto: {resto}")
+    partition_type = "dirichlet"  # "iid", "dirichlet", "class_less"
 
-    # Si la división no es exacta, ajustamos el tamaño del último cliente
-    if resto > 0:
-        for i in range(resto):
-            batch_size[i] += 1
+    if partition_type == "iid":
 
-    # Comprobamos que la suma de los tamaños de los batches sea igual al tamaño del dataset
-    print("Longitudes por cliente:", batch_size)
-    print("Suma de longitudes:", sum(batch_size))
+        # Creamos los subconjuntos de datos para cada cliente
+        dataset_size = len(train_imgs)
+        print(f"Dataset size: {dataset_size}")
 
-    if sum(batch_size) != dataset_size:
-        print("Error: la suma de los tamaños de los batches no es igual al tamaño del dataset")
+        batch_size = [dataset_size // num_clientes] * num_clientes # Creamos una lista con el tamaño del batch para cada cliente
+        resto = dataset_size % num_clientes
+        print(f"Batch size: {batch_size}")
+        print(f"Resto: {resto}")
+
+        # Si la división no es exacta, ajustamos el tamaño del último cliente
+        if resto > 0:
+            for i in range(resto):
+                batch_size[i] += 1
+
+        # Comprobamos que la suma de los tamaños de los batches sea igual al tamaño del dataset
+        print("Longitudes por cliente:", batch_size)
+        print("Suma de longitudes:", sum(batch_size))
+
+        if sum(batch_size) != dataset_size:
+            print("Error: la suma de los tamaños de los batches no es igual al tamaño del dataset")
+            exit()
+
+        dataset_dividido = random_split(train_imgs, batch_size)
+        client_subsets = [Subset(train_imgs, s.indices) for s in dataset_dividido]
+        client_indices = [s.indices for s in dataset_dividido]
+        plot_client_distributions(client_indices, train_imgs, "Distribución IID")
+
+    elif partition_type == "dirichlet":
+
+        alpha = 0.3
+
+        client_indices = non_iid_dirichlet_partition(train_imgs, num_clientes, alpha=alpha)
+
+        # Crear un subconjunto de datos para cada cliente en función de los índices
+        client_subsets = [Subset(train_imgs, indices) for indices in client_indices] 
+        plot_client_distributions(client_indices, train_imgs, "Dirichlet α=0.3")
+
+    elif partition_type == "class_less": # Añdir Variable clases privadas
+
+        alpha = 0.5
+
+        # Reparto no-IID “class-less”:
+        client_indices = non_iid_class_less_partition(train_imgs, num_clientes, alpha=alpha)
+
+        # Crear un subconjunto de datos para cada cliente a partir de los índices
+        client_subsets = [Subset(train_imgs, indices) for indices in client_indices]
+
+        # Visualizar la distribución (ningún cliente tendrá todas las clases y todos los clientes tendrán al menos una clase)
+        plot_client_distributions(client_indices, train_imgs, f"Class-Less α={alpha}")
+
+    else:
+        print("Tipo de partición no soportado. Usa 'iid', 'dirichlet' o 'class_less'")
         exit()
 
-    # División del dataset en partes iguales para cada cliente
-    dataset_dividido = random_split(train_imgs, batch_size)
     
     # Creamos los clientes
     for i in range(num_clientes):
-        print("Cliente " + str(i) + ": Inicializando el cliente...")
-        clientes.append(Cliente(ROLANN(num_classes=10), dataset_dividido[i], device))
+        print(f"Cliente {i}: Inicializando...")
+        clientes.append(Cliente(ROLANN(num_classes=10), client_subsets[i], device))
+
 
 
     global_M_list = []  # Aquí se guardarán las actualizaciones de M de cada cliente
@@ -78,25 +267,9 @@ def main():
     print("Agregación global completada.")
 
 
-    def evaluate(model_rolann, model_resnet, loader): # Añadimos el modelo de ResNet18
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for x, y in loader:
-
-                x = x.to(device) # Subimos los datos a la GPU
-                y = y.to(device) # Subimos las etiquetas a la GPU
-
-                caracterisiticas = model_resnet(x) # Obtenemos las características de la ResNet18
-                preds = model_rolann(caracterisiticas) # Obtenemos las predicciones de la ROLANNs
-
-                correct += (preds.argmax(dim=1) == y).sum().item()
-                total += y.size(0)
-        return correct / total
-
     print("Evaluando el modelo global...")
-    train_acc = evaluate(coordinador.rolann, coordinador.resnet, train_loader)
-    test_acc = evaluate(coordinador.rolann, coordinador.resnet, test_loader)
+    train_acc = coordinador.evaluate(train_loader)
+    test_acc = coordinador.evaluate(test_loader)
 
     print(f"Training Accuracy: {train_acc:.4f}")
     print(f"Test Accuracy: {test_acc:.4f}")

@@ -94,6 +94,7 @@ class ROLANN(nn.Module):
 
             M = torch.matmul(xp, torch.matmul(F, torch.matmul(F, f_d)))
 
+        # encriptar M 
         return M, U, S
 
     def forward(self, X: Tensor) -> Tensor:
@@ -109,6 +110,7 @@ class ROLANN(nn.Module):
         y_hat = torch.empty((n_outputs, n), device=X.device)
 
         for i in range(n_outputs):
+            # Desencriptar pesos solo si encriptado
             w_tmp = self.w[i].permute(
                 *torch.arange(self.w[i].ndim - 1, -1, -1)
             )  # Trasposing
@@ -158,6 +160,7 @@ class ROLANN(nn.Module):
             U = self.ug[i]
             S = self.sg[i]
 
+            # posible quitar self.sparse
             if self.sparse:
                 I_ones = torch.ones(S.size())
                 I_ones_size = list(I_ones.shape)[0]
@@ -181,6 +184,7 @@ class ROLANN(nn.Module):
                     U, torch.matmul(torch.linalg.pinv(aux), torch.matmul(U.T, M))
                 )
             else:
+                # Encritptar
                 diag_elements = 1 / (
                     S * S + self.lamb * torch.ones_like(S, device=S.device)
                 )
