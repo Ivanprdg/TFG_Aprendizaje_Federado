@@ -66,7 +66,7 @@ def non_iid_dirichlet_partition(dataset, num_clients, alpha):
 
 
 # Reparto no-IID “class-less”: Los clientes tienen al menos una clase, pero no todas las clases
-def non_iid_class_less_partition(dataset, num_clients, alpha=0.5):
+def non_iid_class_less_partition(dataset, num_clients, clases_privadas, alpha=0.5):
 
     targets = np.asarray(dataset.targets) # Convertimos a array de NumPy
     num_classes = len(np.unique(targets)) # Obtenemos el número de clases
@@ -75,15 +75,32 @@ def non_iid_class_less_partition(dataset, num_clients, alpha=0.5):
     class_indices = [np.where(targets == c)[0] for c in range(num_classes)]
     all_classes = set(range(num_classes)) # Aqui guardamos todas las clases
 
-    # Cada cliente coge entre 1 y num_classes-1 clases al azar
-    client_classes = []
-    for i in range(num_clients):
-        k = np.random.randint(1, num_classes)  # tamaño del subconjunto
-        client_classes.append(set(np.random.choice(num_classes, size=k, replace=False))) # set hace que no haya duplicados
+
+    # Determinar cuantas clases serán privadas
+    num_private = int(num_classes * clases_privadas) # Porcentaje de clases privadas
+    num_private = min(num_private, num_classes) # Aseguramos que no sea mayor que el número de clases
+
+    private_classes = list(np.random.choice(list(all_classes), size=num_private, replace=False)) # Elegimos las clases privadas al azar
+    print(f"Clases privadas: {private_classes}")
+    shared_classes = list(all_classes - set(private_classes)) # Clases compartidas entre clientes
+
+    client_classes = [set() for _ in range(num_clients)] # Inicializamos un conjunto de clases para cada cliente
+
+    # Asignar clases privadas en “round-robin” sobre los clientes
+    for idx, c in enumerate(private_classes):
+        client = idx % num_clients
+        client_classes[client].add(c)
+
+    # Asignar clases compartidas aleatoriamente a los clientes
+    if shared_classes:
+        for i in range(num_clients):
+            k = np.random.randint(1, len(shared_classes) + 1)
+            picks = set(np.random.choice(shared_classes, size=k, replace=False))
+            client_classes[i].update(picks)
 
     # Si la union detecta que union != num_classes asignamos cada clase faltante
     union = set().union(*client_classes)
-    missing = all_classes - union
+    missing = set(shared_classes) - union # Clases que faltan por asignar
     for clase in missing:
         # elige un cliente que aun no tenga todas las clases
         candidatos = [i for i, s in enumerate(client_classes) if len(s) < num_classes-1]
@@ -176,12 +193,12 @@ def main():
     coordinador = Coordinador(ROLANN(num_classes=10), device)
 
     # Numero de clientes que queremos crear
-    num_clientes = 4
+    num_clientes = 10
     clientes = [] # Lista de clientes
 
     # Cada cliente tendrá un subconjunto del dataset, su propia ResNet y su propio ROLANN
 
-    partition_type = "dirichlet"  # "iid", "dirichlet", "class_less"
+    partition_type = "class_less"  # "iid", "dirichlet", "class_less"
 
     if partition_type == "iid":
 
@@ -226,8 +243,10 @@ def main():
 
         alpha = 0.5
 
+        clases_privadas = 0.4 # Porcentaje de clases privadas 
+
         # Reparto no-IID “class-less”:
-        client_indices = non_iid_class_less_partition(train_imgs, num_clientes, alpha=alpha)
+        client_indices = non_iid_class_less_partition(train_imgs, num_clients=num_clientes, clases_privadas=clases_privadas, alpha=alpha)
 
         # Crear un subconjunto de datos para cada cliente a partir de los índices
         client_subsets = [Subset(train_imgs, indices) for indices in client_indices]
