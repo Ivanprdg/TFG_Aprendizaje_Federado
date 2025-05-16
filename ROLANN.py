@@ -12,6 +12,9 @@ from torch import Tensor
 import torch.nn as nn
 
 
+# Libreria para cifrado homomorfico
+import tenseal as ts
+
 class ROLANN(nn.Module):
     def __init__(
         self,
@@ -19,6 +22,7 @@ class ROLANN(nn.Module):
         lamb: float = 0.01,
         sparse: bool = False,
         activation: str = "logs",
+        encrypted: bool = True, # Añadimos variable para cifrado
     ):
         super(ROLANN, self).__init__()
 
@@ -50,12 +54,30 @@ class ROLANN(nn.Module):
 
         self.sparse = sparse
 
+        self.encrypted = encrypted
+
+        # Configuring the TenSEAL context for the CKKS encryption scheme
+        self.context = ts.context(
+                    ts.SCHEME_TYPE.CKKS,
+                    poly_modulus_degree=32768,
+                    coeff_mod_bit_sizes=[60, 40, 40, 60]
+                )
+        self.context.generate_galois_keys()
+        self.context.global_scale = 2**40
+
+
+
     def update_weights(self, X: Tensor, d: Tensor) -> Tensor:
         results = [self._update_weights(X, d[:, i]) for i in range(self.num_classes)]
 
         ml, ul, sl = zip(*results)
 
-        self.m = torch.stack(ml, dim=0)
+        if self.encrypted:
+            self.m = list(ml)
+        else:
+            # en modo normal, apilamos como tensor
+            self.m = torch.stack(ml, dim=0)
+
         self.u = torch.stack(ul, dim=0)
         self.s = torch.stack(sl, dim=0)
 
@@ -95,6 +117,11 @@ class ROLANN(nn.Module):
             M = torch.matmul(xp, torch.matmul(F, torch.matmul(F, f_d)))
 
         # encriptar M 
+        if (self.encrypted):
+
+            m_plain = M.detach().cpu().numpy().tolist()
+            M = ts.ckks_vector(self.context, m_plain)
+
         return M, U, S
 
     def forward(self, X: Tensor) -> Tensor:
@@ -110,7 +137,13 @@ class ROLANN(nn.Module):
         y_hat = torch.empty((n_outputs, n), device=X.device)
 
         for i in range(n_outputs):
-            # Desencriptar pesos solo si encriptado
+
+            wi = self.w[i]
+            # Solo desencriptar si realmente es CKKSVector
+            if hasattr(wi, "decrypt"):
+                pt        = wi.decrypt()
+                self.w[i] = torch.tensor(pt, dtype=torch.float32, device=X.device)
+
             w_tmp = self.w[i].permute(
                 *torch.arange(self.w[i].ndim - 1, -1, -1)
             )  # Trasposing
@@ -160,37 +193,18 @@ class ROLANN(nn.Module):
             U = self.ug[i]
             S = self.sg[i]
 
-            # posible quitar self.sparse
-            if self.sparse:
-                I_ones = torch.ones(S.size())
-                I_ones_size = list(I_ones.shape)[0]
-                I_sparse = torch.sparse.spdiags(
-                    I_ones,
-                    torch.tensor(0),
-                    (I_ones_size, I_ones_size),
-                    layout=torch.sparse_csr,
-                )
-                S_size = list(S.shape)[0]
-                S_sparse = torch.sparse.spdiags(
-                    S, torch.tensor(0), (S_size, S_size), layout=torch.sparse_csr
-                )
 
-                aux = (
-                    S_sparse.to_dense() * S_sparse.to_dense()
-                    + self.lamb * I_sparse.to_dense()
-                )
-                # Optimal weights: the order of the matrix and vector multiplications has been done to optimize the speed
-                w = torch.matmul(
-                    U, torch.matmul(torch.linalg.pinv(aux), torch.matmul(U.T, M))
-                )
-            else:
-                # Encritptar
-                diag_elements = 1 / (
-                    S * S + self.lamb * torch.ones_like(S, device=S.device)
-                )
-                diag_matrix = torch.diag(diag_elements)
-                # Optimal weights: the order of the matrix and vector multiplications has been done to optimize the speed
-                w = torch.matmul(U, torch.matmul(diag_matrix, torch.matmul(U.T, M)))
+            if hasattr(M, "decrypt"):
+                m_list = M.decrypt()  # lista de floats
+                M = torch.tensor(m_list, dtype=torch.float32, device=U.device)
+
+            diag_elements = 1 / (
+                S * S + self.lamb * torch.ones_like(S, device=S.device)
+            )
+
+            diag_matrix = torch.diag(diag_elements)
+            # Optimal weights: the order of the matrix and vector multiplications has been done to optimize the speed
+            w = torch.matmul(U, torch.matmul(diag_matrix, torch.matmul(U.T, M)))
 
             if i >= len(self.w):
                 # Append optimal weights
