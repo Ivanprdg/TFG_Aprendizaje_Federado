@@ -193,7 +193,7 @@ def main():
     coordinador = Coordinador(ROLANN(num_classes=10), device)
 
     # Numero de clientes que queremos crear
-    num_clientes = 10
+    num_clientes = 4
     clientes = [] # Lista de clientes
 
     # Cada cliente tendrá un subconjunto del dataset, su propia ResNet y su propio ROLANN

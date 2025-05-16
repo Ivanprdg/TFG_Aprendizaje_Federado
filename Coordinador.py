@@ -33,6 +33,19 @@ class Coordinador:
         """
         Recolecta las matrices M y US de cada cliente y las agrega para formar el modelo global.
         """
+
+        # Si estamos en modo cifrado, desencriptar todos los M antes de agregarlos
+        if self.rolann.encrypted:
+            M_list = [
+                [
+                    torch.tensor(m.decrypt(),
+                                 dtype=torch.float32,
+                                 device=self.device)
+                    for m in client_M
+                ]
+                for client_M in M_list
+            ]
+
         # Number of classes
         nclasses = len(M_list[0])
         init = False
@@ -93,13 +106,19 @@ class Coordinador:
     def update_global(self, mg_list, ug_list, sg_list):
         """
         Actualiza el modelo global de ROLANN con las matrices globales calculadas.
-        """        
-        mg_tensor_list = [m if isinstance(m, torch.Tensor) else torch.tensor(m, device=self.device) for m in mg_list]
+        """ 
+
+        if self.rolann.encrypted:       
+            self.rolann.mg = mg_list # No es tensor, es ckks vector 
+        else:
+            mg_tensor_list = [m if isinstance(m, torch.Tensor) else torch.from_numpy(m).to(self.device) for m in mg_list]
+            self.rolann.mg = mg_tensor_list
+
+
         ug_tensor_list = [u if isinstance(u, torch.Tensor) else torch.from_numpy(u).to(self.device) for u in ug_list]
         sg_tensor_list = [s if isinstance(s, torch.Tensor) else torch.from_numpy(s).to(self.device) for s in sg_list]
         
         # Asignamos las listas directamente al modelo global
-        self.rolann.mg = mg_tensor_list
         self.rolann.ug = ug_tensor_list
         self.rolann.sg = sg_tensor_list
         
