@@ -22,7 +22,7 @@ class ROLANN(nn.Module):
         lamb: float = 0.01,
         sparse: bool = False,
         activation: str = "logs",
-        encrypted: bool = True, # Añadimos variable para cifrado
+        encrypted: bool = False, # Añadimos variable para cifrado
     ):
         super(ROLANN, self).__init__()
 

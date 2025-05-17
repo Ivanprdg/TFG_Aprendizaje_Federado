@@ -4,10 +4,17 @@ import torch
 import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
 
+# Imports para la comunicación MQTT
+import json
+import pickle
+import base64
+import paho.mqtt.client as mqtt
+from paho.mqtt.client import CallbackAPIVersion
+
 
 class Coordinador:
 
-    def __init__(self, rolann, device):
+    def __init__(self, rolann, device, num_clients: int, broker: str = "localhost", port: int = 1883):
 
         self.rolann = rolann
         self.device = device
@@ -27,7 +34,59 @@ class Coordinador:
         self.resnet.to(self.device)
         self.resnet.eval()
 
+        # Configuración MQTT
+        self.mqtt = mqtt.Client(client_id="coordinator", callback_api_version=CallbackAPIVersion.VERSION1) # mqtt para el coordinador
+        self.mqtt.message_callback_add("federated/client/+/update", self._on_client_update) # callback para recibir el modelo de los clientes
+        self.mqtt.connect(broker, port) # Conexión al broker MQTT
+        self.mqtt.subscribe("federated/client/+/update", qos=1) # Suscripción al tema del modelo de los clientes
+        self.mqtt.loop_start() # Inicia el bucle de espera de mensajes
 
+        self.num_clients = num_clients  # Número de clientes
+        self._pending = []  # Lista para almacenar los resultados pendientes de los clientes
+
+    # Función para recibir los resultados de los clientes
+    def _on_client_update(self, client, userdata, msg):
+
+        data = json.loads(msg.payload) # Deserializa el mensaje recibido
+        M_list, US_list = [], []
+
+        for i in data: # Recorremos los datos de cada cliente
+
+            # Deserializa la lista de matrices M y US
+
+            plain_M = pickle.loads(base64.b64decode(i["M"]))
+            # Transforma a numpy.ndarray
+            M_arr = np.array(plain_M, dtype=np.float32)
+            # Convierte a tensor
+            M_list.append(torch.from_numpy(M_arr).to(self.device))
+
+            US_np = pickle.loads(base64.b64decode(i["US"]))
+            US_list.append(torch.from_numpy(US_np).to(self.device))
+
+
+        self._pending.append((M_list, US_list)) # Almacena los resultados pendientes
+
+        if len(self._pending) == self.num_clients: # Si se han recibido todos los resultados de los clientes
+            
+            Ms, USs = zip(*self._pending) # Desempaqueta los resultados pendientes
+            self.recolect_parcial(list(Ms), list(USs)) # Recolecta los resultados
+            self._pending.clear() # Limpia la lista de pendientes
+
+            # Serializar y publicar el modelo global
+            body = []
+            for M_glb, U_glb, S_glb in zip(self.M_glb, self.U_glb, self.S_glb):
+
+                US_np = (U_glb @ torch.diag(S_glb)).cpu().numpy() # Reconstruimos matriz US
+                m_bytes = pickle.dumps(M_glb.cpu().numpy()) # Convertimos a numpy y hacemos dumps para obtener la matriz en bytes
+                us_bytes = pickle.dumps(US_np) # Obtenemos la matriz US en bytes
+
+                # Guardar en el body el modelo global
+                body.append({
+                    "M": base64.b64encode(m_bytes).decode(),
+                    "US": base64.b64encode(us_bytes).decode(),
+                })
+
+            self.mqtt.publish("federated/global_model", json.dumps(body), qos=1) # Publica el modelo global
 
     def recolect_parcial(self, M_list, US_list):
         """

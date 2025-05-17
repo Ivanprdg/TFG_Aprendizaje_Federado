@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from torch.utils.data import Subset
 
+import time
+
 # Reparticion de datos no-IID dirichlet, cada cliente tiene al menos una muestra de cada clase
 def non_iid_dirichlet_partition(dataset, num_clients, alpha): 
 
@@ -189,12 +191,12 @@ def main():
     # Configuramos la GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Creamos un Coordinador
-    coordinador = Coordinador(ROLANN(num_classes=10), device)
-
     # Numero de clientes que queremos crear
     num_clientes = 4
     clientes = [] # Lista de clientes
+
+    # Creamos un Coordinador
+    coordinador = Coordinador(ROLANN(num_classes=10), device,  num_clients=num_clientes, broker="localhost", port=1883)
 
     # Cada cliente tendrá un subconjunto del dataset, su propia ResNet y su propio ROLANN
 
@@ -262,29 +264,14 @@ def main():
     # Creamos los clientes
     for i in range(num_clientes):
         print(f"Cliente {i}: Inicializando...")
-        clientes.append(Cliente(ROLANN(num_classes=10), client_subsets[i], device))
+        clientes.append(Cliente(ROLANN(num_classes=10), client_subsets[i], device, client_id=i, broker="localhost", port=1883))
 
-
-
-    global_M_list = []  # Aquí se guardarán las actualizaciones de M de cada cliente
-    global_US_list = [] # Aquí se guardarán las actualizaciones de US de cada cliente
-
-    # Entrenamos a todos los clientes y recopilamos sus actualizaciones
     for i, cliente in enumerate(clientes):
-
         print(f"Entrenando Cliente {i}...")
         cliente.training()  # Entrena localmente al cliente
+        cliente.aggregate_parcial()  # Extrae las matrices locales del cliente
 
-        local_M, local_US = cliente.aggregate_parcial()  # Extrae las matrices locales del cliente
-
-        global_M_list.append(local_M)
-        global_US_list.append(local_US)
-        print(f"Cliente {i} entrenado.")
-
-    # Ahora, el Coordinador realiza la agregación global con todas las actualizaciones
-    coordinador.recolect_parcial(global_M_list, global_US_list)
-    print("Agregación global completada.")
-
+    time.sleep(5)  # Esperamos para asegurarnos de que los clientes han terminado de entrenar
 
     print("Evaluando el modelo global...")
     train_acc = coordinador.evaluate(train_loader)

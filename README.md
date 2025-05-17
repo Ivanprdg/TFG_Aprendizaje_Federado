@@ -140,6 +140,96 @@ Cada cliente entrena localmente su instancia de ROLANN usando las característic
 mg_tensor_list = [m if isinstance(m, torch.Tensor) else torch.tensor(m, device=self.device) for m in mg_list]
 ```
 
+
+## 🚀 Comunicación
+
+Para la orquestación cliente–coordinador usamos **MQTT**:
+
+1. **Broker**  
+   - Actualmente usamos **Mosquitto** como broker MQTT, ejecutándose en `localhost:1883`
+2. **Topics**  
+   - Cada cliente publica sus actualizaciones en:  
+     ```
+     federated/client/<client_id>/update
+     ```
+   - El coordinador se suscribe a:
+     ```
+     federated/client/+/update
+     ```
+     donde `+` es un **wildcard** que coincide con cualquier `client_id` en ese nivel. Así recibe todas las actualizaciones sin tener que suscribirse manualmente a cada cliente. Los clientes se suscriben a `federated/global_model`.
+3. **Wildcards**  
+   - `+` sustituye a un solo nivel jerárquico (p.ej., `client/0/update`, `client/1/update`).  
+   - `#` sustituye a todos los niveles siguientes (p.ej., `sensors/#` recibiría `sensors/temperature`, `sensors/humidity/room1`, etc.).
+4. **QOS (Quality of Service)**  
+   - Usamos `qos=1` para asegurar al menos una entrega (puede reenviar en caso de fallo).
+5. **Payload**  
+   - Serializamos los objetos (vectores y matrices) con **pickle**, luego los codificamos a **base64** y envolvemos en **JSON**.  
+   - Ejemplo en el cliente, para enviar `M_enc` (puede ser CKKSVector o Tensor) y `US` (Tensor):
+     ```python
+     body = []
+     for M_enc, US in zip(local_M, local_US):
+         # Si está cifrado, se queda en CKKSVector, sino tensor
+         m_obj = M_enc.decrypt() if hasattr(M_enc, "decrypt") else M_enc.cpu().numpy().tolist()
+         us_obj = US.cpu().numpy().tolist()
+         bM  = base64.b64encode(pickle.dumps(m_obj)).decode()
+         bUS = base64.b64encode(pickle.dumps(us_obj)).decode()
+         body.append({"M": bM, "US": bUS})
+     mqtt.publish(f"federated/client/{self.client_id}/update", json.dumps(body), qos=1)
+     ```
+   - En el coordinador, al recibir:
+     ```python
+     def _on_client_update(self, client, userdata, msg):
+         data = json.loads(msg.payload.decode())
+         M_list, US_list = [], []
+         for entry in updates:
+             M_obj = pickle.loads(base64.b64decode(entry["M"]))
+             US_obj = pickle.loads(base64.b64decode(entry["US"]))
+             M_list.append(torch.tensor(M_obj, device=self.device))
+             US_list.append(torch.tensor(US_obj, device=self.device))
+         self.recolect_parcial(M_list, US_list)
+     ```
+   - **¿Por qué pickle/base64/JSON?**  
+     - `pickle` serializa objetos Python arbitrarios (incluidos CKKSVector).  
+     - `base64` convierte los bytes binarios a texto para poder incluirlos en un mensaje JSON.  
+     - `JSON` es legible y ampliamente soportado por MQTT.
+6. **Flujo de datos**  
+   1. **Cliente** entrena localmente, calcula `M` y `US`, serializa y hace `publish`.  
+   2. **Broker** reenvía al **Coordinador**, que tiene un callback `_on_client_update`.  
+   3. **Coordinador** deserializa, agrega con SVD, recalcula pesos con `_calculate_weights()` y finalmente sirve el modelo global para evaluación.
+   4. **Esquema:**
+   ```
+    +----------------+         publish                 +-----------+        on_message         +----------------+
+    |   Cliente 0    | ──────────────────────────────▶ |           | ────────────────────────▶|               │
+    | (train + agg)  |   federated/client/0/update     |           |   _on_client_update     |               │
+    +----------------+                                 |  Broker   |                         | Coordinador   |
+                                                      |           |                         |               │
+    +----------------+         publish                 |           |        on_message       |               │
+    |   Cliente 1    | ──────────────────────────────▶ |           | ────────────────────────▶|               │
+    | (train + agg)  |   federated/client/1/update     |           |                         |               │
+    +----------------+                                 +-----------+                         +----------------+
+          ⋮                                                                                      ▲
+          ⋮                                                                                      │ after all updates
+          ⋮                                                                                      │ call recolect_parcial()
+    +----------------+                                                                             │
+    |   Cliente N    |         publish                                                                    
+    | (train + agg)  | ──────────────────────────────▶ Broker                                          
+    +----------------+   federated/client/N/update                                                      
+                                                                                                    │
+                                                                                                    │ publish
+                                                                                                    │ federated/global_model
+                                                                                                    ▼
+    +----------------+                                 +-----------+                         +----------------+
+    |   Cliente 0    | ◀───────────────────────────── |           | ◀─────────────────────── | Coordinador   |
+    |  _on_global_   |      federated/global_model    |           |    publish global       |  (after agg)  |
+    +----------------+                                 |           |                         +----------------+
+                                                      |           |
+    +----------------+                                 |           |
+    |   Cliente 1    | ◀───────────────────────────── |           |
+    |  _on_global_   |      federated/global_model    |           |
+    +----------------+                                 +-----------+
+          ⋮
+    ```
+
 ---
 
 ## 📈 Resultados
