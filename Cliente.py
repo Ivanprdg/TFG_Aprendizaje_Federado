@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision.models import resnet18, ResNet18_Weights
 from tqdm import tqdm
+import numpy as np
 
 # Imports para la comunicación MQTT
 import json
@@ -11,12 +12,13 @@ import base64
 import paho.mqtt.client as mqtt
 from paho.mqtt.client import CallbackAPIVersion
 
+import tenseal as ts
 
 class Cliente:
     def __init__(self, rolann, dataset, device, client_id: int, broker: str = "localhost", port: int = 1883,):
 
-        self.rolann = rolann # Instancia de la clase ROLANN
         self.device = device # Dispositivo (CPU o GPU) donde se ejecutará el cliente
+        self.rolann = rolann # Instancia de la clase ROLANN
         self.loader = DataLoader(dataset, batch_size=128, shuffle=True) # dataset local
 
         # Cada cliente crea su propia ResNet preentrenada y congelada
@@ -26,6 +28,7 @@ class Cliente:
         for param in self.resnet.parameters():
             param.requires_grad = False  # Congelamos la ResNet
 
+        self.resnet.to(self.device) # Mover la ResNet al dispositivo
         self.resnet.eval()
         self.rolann.to(self.device)  # Aseguramos que ROLANN esté en el mismo dispositivo
 
@@ -74,14 +77,16 @@ class Cliente:
 
         for M_enc, US in zip(local_M, local_US): # Recorremos las matrices acumuladas
 
-            # Extraer lista de floats antes de serializar
-            if hasattr(M_enc, "decrypt"):
-                plain_M = M_enc.decrypt()
+            # Si es CKKSVector, serializamos, si no, lo convertimos a lista
+            if hasattr(M_enc, "serialize"):
+                serialized = M_enc.serialize()
+                bM = base64.b64encode(serialized).decode()
             else:
-                plain_M = M_enc.cpu().numpy().tolist()
+                # tensor
+                m_plain = M_enc.cpu().numpy().tolist()
+                bM = base64.b64encode(pickle.dumps(m_plain)).decode()
 
-            # Serializar ambos
-            bM = base64.b64encode(pickle.dumps(plain_M)).decode() # bM es la matriz M serializada es decir la matriz M en bytes
+            # Serializar US y añadir al cuerpo
             bUS = base64.b64encode(pickle.dumps(US.cpu().numpy())).decode() # bUS es la matriz US serializada es decir la matriz US en bytes
             body.append({"M": bM, "US": bUS}) # Añadimos al cuerpo el diccionario con la matriz M y US
 
@@ -95,9 +100,19 @@ class Cliente:
         data = json.loads(msg.payload) # Deserializa el mensaje recibido
         mg, ug, sg = [], [], []
         for i in data: # Recorre los datos recibidos
-            M_np = pickle.loads(base64.b64decode(i["M"])) # Deserializa la matriz M
+
+
+            m_bytes = base64.b64decode(i["M"])
+
+            # si es ciphertext CKKS, lo reconstruimos, si no, pickle
+            try:
+                M_enc = ts.ckks_vector_from(self.rolann.context, m_bytes)
+                mg.append(M_enc)
+            except Exception:
+                arr = pickle.loads(m_bytes)
+                mg.append(torch.from_numpy(np.array(arr, dtype=np.float32)).to(self.device))
+
             US_np = pickle.loads(base64.b64decode(i["US"])) # Deserializa la matriz US
-            mg.append(torch.from_numpy(M_np).to(self.device)) # Convierte a tensor
 
             # Descomponemos US en U y S
             U, S, _ = torch.linalg.svd(
@@ -111,3 +126,25 @@ class Cliente:
         self.rolann.ug = ug
         self.rolann.sg = sg
         self.rolann._calculate_weights()
+
+
+
+    def evaluate(self, loader): # Añadimos el modelo de ResNet18
+        correct = 0
+        total = 0
+
+        self.resnet.to(self.device)
+        self.rolann.to(self.device)
+
+        with torch.no_grad():
+            for x, y in loader:
+
+                x = x.to(self.device) # Subimos los datos a la GPU
+                y = y.to(self.device) # Subimos las etiquetas a la GPU
+
+                caracterisiticas = self.resnet(x) # Obtenemos las características de la ResNet18
+                preds = self.rolann(caracterisiticas) # Obtenemos las predicciones de la ROLANNs
+
+                correct += (preds.argmax(dim=1) == y).sum().item()
+                total += y.size(0)
+        return correct / total

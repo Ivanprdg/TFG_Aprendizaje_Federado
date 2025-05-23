@@ -23,6 +23,7 @@ class ROLANN(nn.Module):
         sparse: bool = False,
         activation: str = "logs",
         encrypted: bool = False, # Añadimos variable para cifrado
+        context: ts.Context | None = None,
     ):
         super(ROLANN, self).__init__()
 
@@ -56,14 +57,15 @@ class ROLANN(nn.Module):
 
         self.encrypted = encrypted
 
-        # Configuring the TenSEAL context for the CKKS encryption scheme
-        self.context = ts.context(
-                    ts.SCHEME_TYPE.CKKS,
-                    poly_modulus_degree=32768,
-                    coeff_mod_bit_sizes=[60, 40, 40, 60]
+        if self.encrypted:
+
+            if context is not None:
+                self.context = context
+            else:                              
+                raise ValueError(
+                    "encrypted=True exige un context compartido. "
+                    "Créalo con rolannfed.crypto.build_ckks_context() y pásalo aquí."
                 )
-        self.context.generate_galois_keys()
-        self.context.global_scale = 2**40
 
 
 
@@ -138,12 +140,6 @@ class ROLANN(nn.Module):
 
         for i in range(n_outputs):
 
-            wi = self.w[i]
-            # Solo desencriptar si realmente es CKKSVector
-            if hasattr(wi, "decrypt"):
-                pt        = wi.decrypt()
-                self.w[i] = torch.tensor(pt, dtype=torch.float32, device=X.device)
-
             w_tmp = self.w[i].permute(
                 *torch.arange(self.w[i].ndim - 1, -1, -1)
             )  # Trasposing
@@ -185,35 +181,27 @@ class ROLANN(nn.Module):
     def _calculate_weights(
         self,
     ) -> None:
+        
         if not self.mg or not self.ug or not self.sg:
             return None
 
+        # solo en cliente: desencriptar mg y generar self.w una sola vez
+        new_w = []
         for i in range(self.num_classes):
             M = self.mg[i]
+            # si es CKKSVector, lo desencriptamos
+            if hasattr(M, "decrypt"):
+                M = torch.tensor(M.decrypt(), device=self.ug[i].device, dtype=torch.float32)
             U = self.ug[i]
             S = self.sg[i]
-
-
-            if hasattr(M, "decrypt"):
-                m_list = M.decrypt()  # lista de floats
-                M = torch.tensor(m_list, dtype=torch.float32, device=U.device)
-
-            diag_elements = 1 / (
-                S * S + self.lamb * torch.ones_like(S, device=S.device)
-            )
-
-            diag_matrix = torch.diag(diag_elements)
-            # Optimal weights: the order of the matrix and vector multiplications has been done to optimize the speed
-            w = torch.matmul(U, torch.matmul(diag_matrix, torch.matmul(U.T, M)))
-
-            if i >= len(self.w):
-                # Append optimal weights
-                self.w.append(w)
-            else:
-                self.w[i] = w
+            diag = torch.diag(1/(S*S + self.lamb))
+            w_i = U @ (diag @ (U.T @ M))
+            new_w.append(w_i)
+        self.w = new_w
 
     def aggregate_update(self, X: Tensor, d: Tensor) -> None:
         self.update_weights(X, d)  # The new M and US are calculated
         self._aggregate_parcial()  # New M and US added to old (global) ones
-        self._calculate_weights()  # The weights are calculated with the new
 
+        #if not self.encrypted: # Los pesos se calculan solo cuando no estan cifrados (clientes)
+            #self._calculate_weights()  # The weights are calculated with the new

@@ -11,6 +11,7 @@ import numpy as np
 from torch.utils.data import Subset
 
 import time
+import tenseal as ts
 
 # Reparticion de datos no-IID dirichlet, cada cliente tiene al menos una muestra de cada clase
 def non_iid_dirichlet_partition(dataset, num_clients, alpha): 
@@ -192,11 +193,31 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Numero de clientes que queremos crear
-    num_clientes = 4
+    num_clientes = 8
     clientes = [] # Lista de clientes
 
+    encrypted = False # Si queremos usar cifrado o no
+
+    if encrypted:
+        # Creamos el contexto del encriptador
+        ctx = ts.context(
+            ts.SCHEME_TYPE.CKKS,
+            poly_modulus_degree=32768,
+            coeff_mod_bit_sizes=[60, 40, 40, 60],
+        )
+        ctx.generate_galois_keys()
+        ctx.global_scale = 2**40
+
+        ctx_secret_key = ctx.serialize(save_secret_key=True)  # incluye secret key 
+        ctx.make_context_public() # aqui lo que se hace es hacer público el contexto, pero no la clave secreta
+        ctx_no_secret_key = ctx.serialize() # aqui se guarda el contexto público pero no la clave secreta
+
     # Creamos un Coordinador
-    coordinador = Coordinador(ROLANN(num_classes=10), device,  num_clients=num_clientes, broker="localhost", port=1883)
+    if encrypted:
+        ctx = ts.context_from(ctx_no_secret_key) # no contiene la clave secreta
+    else:
+        ctx = None
+    coordinador = Coordinador(ROLANN(num_classes=10, encrypted=encrypted, context=ctx), device, num_clients=num_clientes, broker="localhost", port=1883)
 
     # Cada cliente tendrá un subconjunto del dataset, su propia ResNet y su propio ROLANN
 
@@ -264,7 +285,12 @@ def main():
     # Creamos los clientes
     for i in range(num_clientes):
         print(f"Cliente {i}: Inicializando...")
-        clientes.append(Cliente(ROLANN(num_classes=10), client_subsets[i], device, client_id=i, broker="localhost", port=1883))
+
+        if encrypted:
+            ctx = ts.context_from(ctx_secret_key) # no contiene la clave secreta
+        else:
+            ctx = None
+        clientes.append(Cliente(ROLANN(num_classes=10, encrypted=encrypted, context=ctx), client_subsets[i], device, client_id=i, broker="localhost", port=1883))
 
     for i, cliente in enumerate(clientes):
         print(f"Entrenando Cliente {i}...")
@@ -273,12 +299,29 @@ def main():
 
     time.sleep(5)  # Esperamos para asegurarnos de que los clientes han terminado de entrenar
 
-    print("Evaluando el modelo global...")
-    train_acc = coordinador.evaluate(train_loader)
-    test_acc = coordinador.evaluate(test_loader)
+    # Evalue un cliente random entre 0 y num_clientes-1
+    idx = np.random.randint(0, num_clientes)
+
+    print(f"Evaluando el modelo global con el cliente {idx}...")
+
+    train_acc = clientes[idx].evaluate(train_loader)
+    test_acc = clientes[idx].evaluate(test_loader)
 
     print(f"Training Accuracy: {train_acc:.4f}")
     print(f"Test Accuracy: {test_acc:.4f}")
+
+    # Evaluamos el modelo global con otro cliente aleatorio diferente al anterior
+    idx2 = np.random.randint(0, num_clientes)
+    while idx2 == idx:
+        idx2 = np.random.randint(0, num_clientes)
+
+    print(f"Evaluando el modelo global con el cliente {idx2}...")
+
+    train_acc2 = clientes[1].evaluate(train_loader)
+    test_acc2 = clientes[1].evaluate(test_loader)
+
+    print(f"Training Accuracy: {train_acc2:.4f}")
+    print(f"Test Accuracy: {test_acc2:.4f}")
 
 if __name__ == "__main__":
     main()

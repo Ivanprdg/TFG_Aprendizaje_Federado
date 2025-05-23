@@ -11,6 +11,7 @@ import base64
 import paho.mqtt.client as mqtt
 from paho.mqtt.client import CallbackAPIVersion
 
+import tenseal as ts
 
 class Coordinador:
 
@@ -50,16 +51,28 @@ class Coordinador:
         data = json.loads(msg.payload) # Deserializa el mensaje recibido
         M_list, US_list = [], []
 
+        
         for i in data: # Recorremos los datos de cada cliente
 
-            # Deserializa la lista de matrices M y US
+            m_bytes = base64.b64decode(i["M"]) # Deserializa la matriz M    
 
-            plain_M = pickle.loads(base64.b64decode(i["M"]))
-            # Transforma a numpy.ndarray
-            M_arr = np.array(plain_M, dtype=np.float32)
-            # Convierte a tensor
-            M_list.append(torch.from_numpy(M_arr).to(self.device))
+            if self.rolann.encrypted:
+                try:
+                    # reconstruye el vector cifrado sin hacer pickle
+                    M_enc = ts.ckks_vector_from(self.rolann.context, m_bytes)
+                    M_list.append(M_enc)
+                except Exception:
+                    # no era ciphertext CKKS: pickle.loads
+                    arr = pickle.loads(m_bytes)
+                    tensor = torch.from_numpy(np.array(arr, dtype=np.float32)).to(self.device)
+                    M_list.append(tensor)
+            else:
+                # si no es cifrado, deserializa la matriz M usando pickle
+                arr = pickle.loads(m_bytes)
+                tensor = torch.from_numpy(np.array(arr, dtype=np.float32)).to(self.device)
+                M_list.append(tensor) 
 
+            # Deserializa US
             US_np = pickle.loads(base64.b64decode(i["US"]))
             US_list.append(torch.from_numpy(US_np).to(self.device))
 
@@ -77,8 +90,15 @@ class Coordinador:
             for M_glb, U_glb, S_glb in zip(self.M_glb, self.U_glb, self.S_glb):
 
                 US_np = (U_glb @ torch.diag(S_glb)).cpu().numpy() # Reconstruimos matriz US
-                m_bytes = pickle.dumps(M_glb.cpu().numpy()) # Convertimos a numpy y hacemos dumps para obtener la matriz en bytes
                 us_bytes = pickle.dumps(US_np) # Obtenemos la matriz US en bytes
+
+                # M_glb puede ser CKKSVector o tensor
+                if hasattr(M_glb, "serialize"):
+                    # ciphertext puro –> serialize()
+                    m_bytes = M_glb.serialize()
+                else:
+                    # tensor –> numpy + pickle
+                    m_bytes = pickle.dumps(M_glb.cpu().numpy())
 
                 # Guardar en el body el modelo global
                 body.append({
@@ -92,18 +112,6 @@ class Coordinador:
         """
         Recolecta las matrices M y US de cada cliente y las agrega para formar el modelo global.
         """
-
-        # Si estamos en modo cifrado, desencriptar todos los M antes de agregarlos
-        if self.rolann.encrypted:
-            M_list = [
-                [
-                    torch.tensor(m.decrypt(),
-                                 dtype=torch.float32,
-                                 device=self.device)
-                    for m in client_M
-                ]
-                for client_M in M_list
-            ]
 
         # Number of classes
         nclasses = len(M_list[0])
@@ -126,6 +134,7 @@ class Coordinador:
 
             # Aggregation of M and US
             for M_k, US_k in zip(M_rest, US_rest):
+
                 M = M + M_k
                 
                 # Convertir ambos a tensores en el dispositivo correcto
@@ -182,21 +191,6 @@ class Coordinador:
         self.rolann.sg = sg_tensor_list
         
         # Recalcula los pesos globales en base a las nuevas matrices agregadas
-        self.rolann._calculate_weights()
+        # self.rolann._calculate_weights() creo que esto sobra
 
 
-    def evaluate(self, loader): # Añadimos el modelo de ResNet18
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for x, y in loader:
-
-                x = x.to(self.device) # Subimos los datos a la GPU
-                y = y.to(self.device) # Subimos las etiquetas a la GPU
-
-                caracterisiticas = self.resnet(x) # Obtenemos las características de la ResNet18
-                preds = self.rolann(caracterisiticas) # Obtenemos las predicciones de la ROLANNs
-
-                correct += (preds.argmax(dim=1) == y).sum().item()
-                total += y.size(0)
-        return correct / total
