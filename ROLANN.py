@@ -63,8 +63,7 @@ class ROLANN(nn.Module):
                 self.context = context
             else:                              
                 raise ValueError(
-                    "encrypted=True exige un context compartido. "
-                    "Créalo con rolannfed.crypto.build_ckks_context() y pásalo aquí."
+                    "Se necesita de un contexto para trabajar en modo encriptado. "
                 )
 
 
@@ -202,6 +201,5 @@ class ROLANN(nn.Module):
     def aggregate_update(self, X: Tensor, d: Tensor) -> None:
         self.update_weights(X, d)  # The new M and US are calculated
         self._aggregate_parcial()  # New M and US added to old (global) ones
+        
 
-        #if not self.encrypted: # Los pesos se calculan solo cuando no estan cifrados (clientes)
-            #self._calculate_weights()  # The weights are calculated with the new
