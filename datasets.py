@@ -67,7 +67,35 @@ def get_dataset(dataset: int):
         train_loader = DataLoader(train, batch_size=128, shuffle=True)
         test_loader = DataLoader(test, batch_size=128, shuffle=False)
 
+    elif dataset == 2:
+
+        # CIFAR100
+        # Transformación temporal para calcular la media y la desviación típica
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()
+        ])
+
+        # Cargamos el dataset CIFAR100 con la transformación temporal
+        cifar100_train_dataset = datasets.CIFAR100(root="./data", train=True, download=True, transform=transform)
+
+        cifar100_mean = (cifar100_train_dataset.data / 255).mean(axis=(0, 1, 2))
+        cifar100_std = (cifar100_train_dataset.data / 255).std(axis=(0, 1, 2))
+
+        print("CIFAR100 mean RGB:", cifar100_mean)
+        print("CIFAR100 std RGB:", cifar100_std)
+
+        # Transformación definitiva
+        transform.transforms.append(
+            transforms.Normalize(mean=cifar100_mean, std=cifar100_std)
+        )
+
+        train = datasets.CIFAR100(root="./data", train=True, download=True, transform=transform)
+        test = datasets.CIFAR100(root="./data", train=False, download=True, transform=transform)
+
+        train_loader = DataLoader(train, batch_size=128, shuffle=True)
+        test_loader = DataLoader(test, batch_size=128, shuffle=False)
     else:
-        raise ValueError("Valor inválido para el dataset. Usa 0 (MNIST) o 1 (CIFAR10).")
+        raise ValueError("Valor inválido para el dataset. Usa 0 (MNIST) o 1 (CIFAR10) o 2 (CIFAR100).")
 
     return train, train_loader, test_loader

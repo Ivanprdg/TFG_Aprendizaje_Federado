@@ -12,6 +12,7 @@ from torch.utils.data import Subset
 
 import time
 import tenseal as ts
+import threading
 
 # Reparticion de datos no-IID dirichlet, cada cliente tiene al menos una muestra de cada clase
 def non_iid_dirichlet_partition(dataset, num_clients, alpha): 
@@ -129,6 +130,45 @@ def non_iid_class_less_partition(dataset, num_clients, clases_privadas, alpha=0.
         for client_id, split in zip(clientes, splits): # asignamos los indices a los clientes
             client_indices[client_id].extend(split.tolist())
 
+
+    # ------------------------------------------------------------------
+    #    Garantizar que ningún cliente queda vacío
+    #    – solo se transfieren muestras de CLASES COMPARTIDAS –
+    # ------------------------------------------------------------------
+    lens = [len(idx) for idx in client_indices]
+    empty_clients  = [i for i, L in enumerate(lens) if L == 0]
+    if empty_clients:
+        # Conjunto de clases compartidas
+        shared_classes = set(range(num_classes)) - set(private_classes)
+
+        # Función auxiliar: devuelve la clase de un índice
+        targets_arr = np.asarray(dataset.targets)
+        def cls(idx): return int(targets_arr[idx])
+
+        # Clientes que pueden donar (tienen >1 muestras de alguna clase compartida)
+        donors = [i for i, L in enumerate(lens) if L > 1]
+
+        for cli in empty_clients:
+            moved = False
+            np.random.shuffle(donors)  # evitar sesgos
+            for d in donors:
+                # buscamos una muestra de clase compartida en el donante
+                for k, src_idx in enumerate(client_indices[d]):
+                    if cls(src_idx) in shared_classes:
+                        client_indices[cli].append(src_idx)
+                        del client_indices[d][k]
+                        moved = True
+                        # el donante sigue siendo válido solo si aún tiene >1
+                        if len(client_indices[d]) <= 1:
+                            donors.remove(d)
+                        break
+                if moved:
+                    break
+            # Si no encontramos muestra compartida (caso extremo), repetimos sorteo Dirichlet
+            if not moved:
+                raise RuntimeError("No se encontró muestra compartida para cliente vacío")
+    # -----------------------------------------------------------------
+
     return client_indices
 
 
@@ -192,11 +232,14 @@ def main():
     # Configuramos la GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    num_classes = len(train_imgs.classes) 
     # Numero de clientes que queremos crear
-    num_clientes = 8
+    num_clientes = 4
     clientes = [] # Lista de clientes
 
-    encrypted = False # Si queremos usar cifrado o no
+    barrier = threading.Barrier(num_clientes + 1)  # instanciamos una barrera para sincronizar los clientes
+
+    encrypted = True # Si queremos usar cifrado o no
 
     if encrypted:
         # Creamos el contexto del encriptador
@@ -217,11 +260,11 @@ def main():
         ctx = ts.context_from(ctx_no_secret_key) # no contiene la clave secreta
     else:
         ctx = None
-    coordinador = Coordinador(ROLANN(num_classes=10, encrypted=encrypted, context=ctx), device, num_clients=num_clientes, broker="localhost", port=1883)
+    coordinador = Coordinador(ROLANN(num_classes=num_classes, encrypted=encrypted, context=ctx), device, num_clients=num_clientes, broker="localhost", port=1883)
 
     # Cada cliente tendrá un subconjunto del dataset, su propia ResNet y su propio ROLANN
 
-    partition_type = "class_less"  # "iid", "dirichlet", "class_less"
+    partition_type = "dirichlet"  # "iid", "dirichlet", "class_less"
 
     if partition_type == "iid":
 
@@ -290,14 +333,16 @@ def main():
             ctx = ts.context_from(ctx_secret_key) # no contiene la clave secreta
         else:
             ctx = None
-        clientes.append(Cliente(ROLANN(num_classes=10, encrypted=encrypted, context=ctx), client_subsets[i], device, client_id=i, broker="localhost", port=1883))
-
+        cliente = Cliente(ROLANN(num_classes=num_classes, encrypted=encrypted, context=ctx), client_subsets[i], device, client_id=i, broker="localhost", port=1883)
+        cliente.barrier = barrier # Asignamos la barrera al cliente
+        clientes.append(cliente)  # Añadimos el cliente a la lista de clientes
+        
     for i, cliente in enumerate(clientes):
         print(f"Entrenando Cliente {i}...")
         cliente.training()  # Entrena localmente al cliente
         cliente.aggregate_parcial()  # Extrae las matrices locales del cliente
 
-    time.sleep(5)  # Esperamos para asegurarnos de que los clientes han terminado de entrenar
+    barrier.wait(timeout=180) # se desbloquea cuando el último cliente llegue
 
     # Evalue un cliente random entre 0 y num_clientes-1
     idx = np.random.randint(0, num_clientes)

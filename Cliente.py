@@ -40,6 +40,8 @@ class Cliente:
         self.mqtt.loop_start() # Inicia el bucle de espera de mensajes
 
         self.client_id = client_id  # ID del cliente
+        self.barrier = None  # Barrera para sincronización
+
 
     
     def training(self):
@@ -57,7 +59,7 @@ class Cliente:
                 features = self.resnet(x)  # Extraemos características locales
 
             # Convertimos las etiquetas a one-hot para que coincidan con el número de clases
-            label = (torch.nn.functional.one_hot(y, num_classes=10) * 0.9 + 0.05).to(self.device)
+            label = (torch.nn.functional.one_hot(y, num_classes=self.rolann.num_classes) * 0.9 + 0.05).to(self.device)
             self.rolann.aggregate_update(features, label)
 
         # Movemos la resnet a cpu
@@ -126,6 +128,9 @@ class Cliente:
         self.rolann.ug = ug
         self.rolann.sg = sg
         self.rolann._calculate_weights()
+
+        if self.barrier is not None:
+            self.barrier.wait() # bloquea hasta que todos lleguen
 
 
 
